@@ -1,0 +1,16 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.coverage
+htmlcov
+.env
+medikiosk.db
+medikiosk.db-journal
+.git
+.gitignore
+.vscode
+.idea
+uploads/*
+!uploads/.gitkeep
