@@ -26,6 +26,66 @@ export interface CurrentUser {
   doctor_id?: string;
 }
 
+export interface AIIntakeReportSaveRequest {
+  patient_id?: string;
+  hospital_name?: string;
+  chief_complaint: string;
+  symptoms: string[];
+  duration: string;
+  severity: string;
+  risk: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  medical_history?: string[];
+  current_medications?: string[];
+  allergies?: string[];
+  vitals?: Record<string, unknown>;
+  preliminary_assessment: string;
+  suggested_otc_medicines?: string[];
+  recommended_department: string;
+  recommended_action: string;
+  warning_signs?: string[];
+  follow_up: string;
+  disclaimer?: string;
+  triage_level?: TriageLevel;
+  triage_reasoning?: string;
+  is_emergency?: boolean;
+  confidence_score?: number;
+  medical_summary?: Record<string, string>;
+}
+
+export interface AIIntakeReportSaveResponse {
+  report_id: string;
+  patient_id: string;
+  saved_at: string;
+  created_at: string;
+  status: string;
+  message: string;
+  report_data: Record<string, unknown>;
+}
+
+export interface AIIntakeReportRecord {
+  id: string;
+  patient_id: string;
+  created_at: string;
+  report_data: Record<string, unknown>;
+  hospital_name: string;
+  chief_complaint: string;
+  symptoms: string[];
+  duration: string;
+  severity: string;
+  risk: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  preliminary_assessment: string;
+  suggested_otc_medicines: string[];
+  recommended_department: string;
+  recommended_action: string;
+  warning_signs: string[];
+  follow_up: string;
+  disclaimer: string;
+  medical_history: string[];
+  current_medications: string[];
+  allergies: string[];
+  vitals: { bp: string; hr: string; spo2: string; temperature: string };
+}
+
 export interface TokenResponse {
   access_token: string;
   refresh_token: string;
@@ -557,6 +617,3 @@ export interface GovernmentDashboardOverviewResponse {
   heatmaps_data: HeatmapGeoPoint[];
   monthly_reports: MonthlySurveillanceReport[];
 }
-
-
-

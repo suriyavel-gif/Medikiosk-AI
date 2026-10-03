@@ -118,9 +118,9 @@ export default function MedicalTimelinePage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSpecialty, setSelectedSpecialty] = useState("ALL");
   const [selectedHospitalFilter, setSelectedHospitalFilter] = useState("ALL");
-  const [expandedVisits, setExpandedVisits] = useState<Record<string, boolean>>({
-    "enc-01": true,
-  });
+  const [expandedVisits, setExpandedVisits] = useState<Record<string, boolean>>({});
+  const [encounters, setEncounters] = useState<ClinicalVisitEncounter[]>([]);
+  const [intakeReports, setIntakeReports] = useState<any[]>([]);
 
   // AI Summary Modal State
   const [showAiSummaryModal, setShowAiSummaryModal] = useState(false);
@@ -132,238 +132,45 @@ export default function MedicalTimelinePage() {
     keyInsights: string[];
   } | null>(null);
 
-  // Longitudinal Clinical Encounters Dataset
-  const encounters: ClinicalVisitEncounter[] = [
-    {
-      id: "enc-01",
-      visit_date: "August 28, 2026",
-      visit_time: "10:30 AM",
-      hospital_name: selectedHospital.name,
-      hospital_short: selectedHospital.shortName,
-      department: "Cardiology & Internal Medicine",
-      doctor_name: "Dr. Rajesh Sharma",
-      doctor_degree: "MD (Cardiology), DM (Interventional)",
-      doctor_reg: "MCI-2018-948210",
-      opd_room: `OPD ${selectedHospital.emrRoom}`,
-      chief_complaint: "Productive cough and mild chest tightness on moderate exertion",
-      duration: "3 days",
-      severity: "Moderate (4/10)",
-      triage_level: "ESI_3_URGENT",
-      vitals: {
-        bp: "128/82 mmHg",
-        bp_status: "Prehypertension",
-        hr: "76 BPM",
-        hr_status: "Sinus Rhythm",
-        spo2: "98%",
-        spo2_status: "Optimal",
-        temp: "98.4 °F",
-        temp_status: "Afebrile",
-        resp_rate: "16 bpm",
-        bmi: "23.4 (Normal)",
-      },
-      diagnoses: [
-        { code: "ICD-10 J06.9", name: "Acute upper respiratory infection, unspecified", type: "PRIMARY" },
-        { code: "ICD-10 I10", name: "Essential (primary) hypertension", type: "CHRONIC" },
-      ],
-      prescriptions: [
-        {
-          medicine_name: "Telmisartan 40mg",
-          generic_name: "Telmisartan",
-          dosage: "1 Tablet (40mg)",
-          frequency: "Once Daily",
-          duration: "30 Days",
-          food_instruction: "After Breakfast (8:00 AM)",
-          morning: true,
-          afternoon: false,
-          night: false,
-        },
-        {
-          medicine_name: "Augmentin 625 Duo",
-          generic_name: "Amoxicillin + Clavulanic Acid",
-          dosage: "1 Tablet (625mg)",
-          frequency: "Twice Daily",
-          duration: "5 Days",
-          food_instruction: "After Food (8 AM & 8 PM)",
-          morning: true,
-          afternoon: false,
-          night: true,
-        },
-        {
-          medicine_name: "Pan 40",
-          generic_name: "Pantoprazole 40mg",
-          dosage: "1 Tablet (40mg)",
-          frequency: "Once Daily",
-          duration: "7 Days",
-          food_instruction: "Before Breakfast (7:30 AM)",
-          morning: true,
-          afternoon: false,
-          night: false,
-        },
-      ],
-      diagnostic_tests: [
-        { test_name: "Complete Blood Count (CBC)", category: "Hematology", status: "COMPLETED", result_summary: "WBC 7,200/mcL, Hb 14.2 g/dL (Normal)" },
-        { test_name: "Chest X-Ray (PA View)", category: "Radiology", status: "COMPLETED", result_summary: "No focal consolidation or pleural effusion" },
-      ],
-      reports: [
-        { title: "CBC Automated Panel", report_type: "LAB_HEMATOLOGY", date: "Aug 28, 2026", findings: "Hemoglobin 14.2 g/dL, Platelets 240,000 /mcL, Neutrophils 62%" },
-        { title: "Chest Radiograph PA View", report_type: "RADIOLOGY_XRAY", date: "Aug 28, 2026", findings: "Clear bilateral lung fields, normal cardiothoracic ratio (0.46)" },
-      ],
-      soap_notes: {
-        subjective: "Patient presented with a 3-day history of productive mucoid cough and mild retrosternal tightness on climbing stairs. No fever spikes at home. Compliant with antihypertensive therapy.",
-        objective: "Hemodynamically stable. Vitals: BP 128/82 mmHg, HR 76 BPM, SpO2 98% on room air. Chest auscultation revealed bilateral vesicular breath sounds with faint scattered expiratory wheeze. S1/S2 heard normally, no murmurs.",
-        assessment: "1. Acute viral upper respiratory tract infection with mild bronchospasm. 2. Well-controlled Essential Hypertension.",
-        plan: "1. 5-day course of Augmentin 625 Duo and gastroprotective PPI. 2. Continue Telmisartan 40mg morning. 3. Steam inhalation twice daily. 4. Review in 5 days if cough persists.",
-      },
-      follow_up: {
-        date: "September 02, 2026",
-        instructions: "Maintain adequate oral hydration. Avoid cold beverages and air pollutants. Take medications strictly after meals.",
-        red_flags: "Immediate emergency review if fever exceeds 102°F, hemoptysis occurs, or acute breathlessness develops.",
-      },
-    },
-    {
-      id: "enc-02",
-      visit_date: "June 14, 2026",
-      visit_time: "11:15 AM",
-      hospital_name: "Fortis Healthcare Center",
-      hospital_short: "Fortis FMRI",
-      department: "Endocrinology & General Medicine",
-      doctor_name: "Dr. Ananya Roy",
-      doctor_degree: "MBBS, MD (Endocrinology)",
-      doctor_reg: "DMC-2016-778219",
-      opd_room: "OPD 108",
-      chief_complaint: "Routine 3-month glycemic review and annual metabolic wellness check",
-      duration: "Routine Check",
-      severity: "Mild (1/10)",
-      triage_level: "ESI_5_NON_URGENT",
-      vitals: {
-        bp: "124/80 mmHg",
-        bp_status: "Normotensive",
-        hr: "72 BPM",
-        hr_status: "Sinus Rhythm",
-        spo2: "99%",
-        spo2_status: "Optimal",
-        temp: "98.2 °F",
-        temp_status: "Afebrile",
-        resp_rate: "14 bpm",
-        bmi: "23.2 (Normal)",
-      },
-      diagnoses: [
-        { code: "ICD-10 E11.9", name: "Type 2 diabetes mellitus without complications", type: "CHRONIC" },
-        { code: "ICD-10 E78.0", name: "Pure hypercholesterolemia", type: "SECONDARY" },
-      ],
-      prescriptions: [
-        {
-          medicine_name: "Metformin 500mg SR",
-          generic_name: "Metformin Extended Release",
-          dosage: "1 Tablet (500mg)",
-          frequency: "Twice Daily",
-          duration: "90 Days",
-          food_instruction: "With Meals (8 AM & 8 PM)",
-          morning: true,
-          afternoon: false,
-          night: true,
-        },
-        {
-          medicine_name: "Atorvastatin 10mg",
-          generic_name: "Atorvastatin Calcium",
-          dosage: "1 Tablet (10mg)",
-          frequency: "Once Daily",
-          duration: "90 Days",
-          food_instruction: "At Bedtime (10:00 PM)",
-          morning: false,
-          afternoon: false,
-          night: true,
-        },
-      ],
-      diagnostic_tests: [
-        { test_name: "Glycated Hemoglobin (HbA1c)", category: "Biochemistry", status: "COMPLETED", result_summary: "HbA1c 6.4% (Target: <7.0%)" },
-        { test_name: "Fasting Blood Sugar (FBS)", category: "Biochemistry", status: "COMPLETED", result_summary: "FBS 108 mg/dL (Normal)" },
-        { test_name: "Comprehensive Lipid Profile", category: "Biochemistry", status: "COMPLETED", result_summary: "Total Cholesterol 184 mg/dL, LDL 102 mg/dL, HDL 48 mg/dL" },
-      ],
-      reports: [
-        { title: "Metabolic Biomarker Report", report_type: "LAB_BIOCHEMISTRY", date: "Jun 14, 2026", findings: "HbA1c 6.4%, Fasting Glucose 108 mg/dL, Serum Creatinine 0.9 mg/dL" },
-        { title: "Lipid Profile Panel", report_type: "LAB_BIOCHEMISTRY", date: "Jun 14, 2026", findings: "Total Cholesterol 184 mg/dL, Triglycerides 142 mg/dL, LDL 102 mg/dL" },
-      ],
-      soap_notes: {
-        subjective: "Asymptomatic 38-year-old male presenting for routine glycemic monitoring. Reports excellent compliance with Metformin and daily 30-minute brisk walks. No polyuria, polydipsia, or neuropathic numbness.",
-        objective: "Physical exam unremarkable. BP 124/80 mmHg, Pulse 72 BPM regular. Pedal pulses well palpable bilaterally. Monofilament sensory testing normal.",
-        assessment: "Type 2 Diabetes Mellitus with excellent glycemic control (HbA1c 6.4%). Mild dyslipidemia well-stabilized on low-dose statin.",
-        plan: "1. Continue Metformin 500mg SR twice daily with meals. 2. Continue Atorvastatin 10mg at bedtime. 3. Maintain regular aerobic exercise and low-glycemic dietary regimen. 4. Next HbA1c review in 3 months.",
-      },
-      follow_up: {
-        date: "September 15, 2026",
-        instructions: "Repeat Fasting Blood Sugar and HbA1c 1 week prior to next review.",
-        red_flags: "Contact clinic if recurrent hypoglycemic symptoms (tremors, sweating, dizziness) occur.",
-      },
-    },
-    {
-      id: "enc-03",
-      visit_date: "January 22, 2026",
-      visit_time: "02:45 PM",
-      hospital_name: "AIIMS New Delhi",
-      hospital_short: "AIIMS Delhi",
-      department: "Cardiology OPD",
-      doctor_name: "Dr. Vikram Seth",
-      doctor_degree: "MD, DM (Cardiology)",
-      doctor_reg: "MCI-2012-441209",
-      opd_room: "Room 204",
-      chief_complaint: "Annual cardiovascular health evaluation and ECG rhythm screening",
-      duration: "Annual Check",
-      severity: "Mild (1/10)",
-      triage_level: "ESI_5_NON_URGENT",
-      vitals: {
-        bp: "126/82 mmHg",
-        bp_status: "Normotensive",
-        hr: "74 BPM",
-        hr_status: "Normal Sinus Rhythm",
-        spo2: "99%",
-        spo2_status: "Optimal",
-        temp: "98.4 °F",
-        temp_status: "Afebrile",
-        resp_rate: "15 bpm",
-        bmi: "23.5 (Normal)",
-      },
-      diagnoses: [
-        { code: "ICD-10 I10", name: "Essential (primary) hypertension", type: "CHRONIC" },
-      ],
-      prescriptions: [
-        {
-          medicine_name: "Telmisartan 40mg",
-          generic_name: "Telmisartan",
-          dosage: "1 Tablet (40mg)",
-          frequency: "Once Daily",
-          duration: "180 Days",
-          food_instruction: "After Breakfast",
-          morning: true,
-          afternoon: false,
-          night: false,
-        },
-      ],
-      diagnostic_tests: [
-        { test_name: "12-Lead Electrocardiogram (ECG)", category: "Cardiology", status: "COMPLETED", result_summary: "Normal sinus rhythm at 74 BPM, normal axis, no ST-T wave abnormalities" },
-        { test_name: "2D Echocardiography", category: "Cardiology", status: "COMPLETED", result_summary: "Normal LV systolic function, LVEF 62%, no regional wall motion abnormality" },
-      ],
-      reports: [
-        { title: "12-Lead Resting ECG Trace", report_type: "ECG_TRACE", date: "Jan 22, 2026", findings: "PR interval 150ms, QRS 88ms, QTc 410ms. No ischemic changes." },
-        { title: "Transthoracic 2D Echo Report", report_type: "CARDIOLOGY_ECHO", date: "Jan 22, 2026", findings: "Concentric LV remodeling absent, preserved ejection fraction (62%), normal diastolic function." },
-      ],
-      soap_notes: {
-        subjective: "Patient presented for annual cardiovascular health audit. Reports feeling well, zero anginal chest pain, no palpitations, excellent functional capacity (NYHA Class I).",
-        objective: "Resting BP 126/82 mmHg. Normal heart sounds S1 and S2. Peripheral pulses intact.",
-        assessment: "Stable primary hypertension with zero end-organ damage and preserved myocardial function.",
-        plan: "1. Continue Telmisartan 40mg daily. 2. Maintain dietary salt restriction (<5g/day). 3. Annual cardiac follow-up in 12 months.",
-      },
-      follow_up: {
-        date: "January 2027",
-        instructions: "Maintain home BP log (measure weekly). Continue regular exercise.",
-        red_flags: "Seek emergency evaluation for acute substernal chest pressure radiating to left arm or jaw.",
-      },
-    },
-  ];
+  const toEncounter = (event: any): ClinicalVisitEncounter => ({
+    id: event.event_id,
+    visit_date: event.timestamp ? new Date(event.timestamp).toLocaleDateString() : "Date unavailable",
+    visit_time: event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : "",
+    hospital_name: event.hospital_name || "Hospital not recorded",
+    hospital_short: event.hospital_name || "Hospital not recorded",
+    department: event.metadata?.department || "Not recorded",
+    doctor_name: event.doctor_name || "Not recorded",
+    doctor_degree: "",
+    doctor_reg: "",
+    opd_room: "",
+    chief_complaint: event.description || event.title || "Clinical event",
+    duration: "",
+    severity: event.metadata?.severity || "Not recorded",
+    triage_level: event.metadata?.triage_level || "Not recorded",
+    vitals: { bp: "", bp_status: "", hr: "", hr_status: "", spo2: "", spo2_status: "", temp: "", temp_status: "", resp_rate: "", bmi: "" },
+    diagnoses: event.event_type === "DIAGNOSIS" ? [{ code: event.metadata?.icd10 || "", name: event.title || "Diagnosis", type: "PRIMARY" }] : [],
+    prescriptions: [],
+    diagnostic_tests: [],
+    reports: event.event_type === "REPORT" ? [{ title: event.title, report_type: event.metadata?.mime_type || "Report", date: event.timestamp || "", findings: event.description || "" }] : [],
+    soap_notes: { subjective: "", objective: "", assessment: event.metadata?.ai_summary || "", plan: "" },
+    follow_up: { date: "", instructions: "", red_flags: "" },
+  });
 
   useEffect(() => {
-    setLoading(false);
+    let active = true;
+    api.ai.getIntakeReports(user?.id || "").then((response) => {
+      if (response.success && Array.isArray(response.data) && active) setIntakeReports(response.data);
+    }).catch(() => { if (active) toast.error("Could not load saved intake reports"); });
+    api.patient.getTimeline().then((response) => {
+      if (!response.success || !response.data) throw new Error(response.message || "Could not load timeline");
+      if (active) setEncounters((response.data.timeline || []).map(toEncounter));
+    }).catch((error) => {
+      toast.error(error instanceof Error ? error.message : "Could not load timeline");
+      if (active) setEncounters([]);
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, []);
+
 
   const toggleVisit = (id: string) => {
     setExpandedVisits((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -384,37 +191,23 @@ export default function MedicalTimelinePage() {
   };
 
   const handleGenerateAiSummary = async () => {
+    if (!user?.id) { toast.error("Patient identity is unavailable."); return; }
     setAiSummaryLoading(true);
     setShowAiSummaryModal(true);
-
     try {
-      // Simulate Gemini longitudinal synthesis
-      setTimeout(() => {
-        setAiSummaryData({
-          trajectory: "Vikram Malhotra's multi-year longitudinal health trajectory reflects well-managed chronic conditions (Essential Hypertension and Type 2 Diabetes) across Apollo, Fortis, and AIIMS. Myocardial structure and renal parameters are fully preserved.",
-          chronicConditions: [
-            "Essential Hypertension (ICD-10 I10) — Stable on Telmisartan 40mg (BP 124-128/80-82 mmHg)",
-            "Type 2 Diabetes Mellitus (ICD-10 E11.9) — Optimal glycemic control (HbA1c 6.4%, FBS 108 mg/dL)",
-          ],
-          activeMedications: [
-            "Telmisartan 40mg (Morning after breakfast)",
-            "Metformin 500mg SR (Twice daily with meals)",
-            "Atorvastatin 10mg (Night at bedtime)",
-          ],
-          keyInsights: [
-            "Preserved Cardiac Function: 2D Echo confirms LVEF 62% with normal sinus rhythm.",
-            "Metabolic Control: HbA1c of 6.4% is comfortably below the diabetic target threshold of 7.0%.",
-            "Acute Episode: Recent Aug 2026 URI episode managed with Augmentin 625 Duo; resolve in 5 days.",
-            "Proactive Wellness: Continue daily 30-minute brisk walks and low-sodium Mediterranean diet.",
-          ],
-        });
-        setAiSummaryLoading(false);
-      }, 900);
-    } catch (err) {
-      setAiSummaryLoading(false);
-    }
+      const response = await api.ai.getCaseSummary({ patient_id: user.id });
+      if (!response.success || !response.data) throw new Error(response.message || "AI case summary failed");
+      setAiSummaryData({
+        trajectory: response.data.clinical_notes || "",
+        chronicConditions: response.data.major_diseases || [],
+        activeMedications: response.data.current_medicines || [],
+        keyInsights: response.data.recent_lab_findings || [],
+      });
+    } catch (error) {
+      setAiSummaryData(null);
+      toast.error(error instanceof Error ? error.message : "AI case summary failed");
+    } finally { setAiSummaryLoading(false); }
   };
-
   // Filter Encounters
   const filteredEncounters = encounters.filter((e) => {
     const q = searchQuery.toLowerCase();
@@ -605,39 +398,21 @@ export default function MedicalTimelinePage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-            <div className="p-4 rounded-2xl bg-white border border-blue-200/80 space-y-2.5 shadow-2xs">
-              <div className="flex items-center justify-between">
-                <span className="font-mono font-bold text-[#2563EB]">RPT-INTAKE-2026-001</span>
-                <span className="px-2 py-0.5 rounded-md bg-yellow-100 text-yellow-800 text-[10px] font-bold">
-                  MEDIUM RISK
-                </span>
+            {intakeReports.map((report) => (
+              <div key={report.id} className="p-4 rounded-2xl bg-white border border-blue-200/80 space-y-2.5 shadow-2xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono font-bold text-[#2563EB]">{report.id}</span>
+                  <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold">{report.risk} RISK</span>
+                </div>
+                <p className="font-bold text-slate-900">{report.chief_complaint}</p>
+                <p className="text-slate-600 text-[11px] leading-relaxed">{report.preliminary_assessment}</p>
+                <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-100">
+                  <span>{report.hospital_name || "Hospital not recorded"}</span>
+                  <span>{new Date(report.created_at).toLocaleString()}</span>
+                </div>
               </div>
-              <p className="font-bold text-slate-900">Acute viral URI with low-grade fever & sore throat</p>
-              <p className="text-slate-600 text-[11px] leading-relaxed">
-                Preliminary Assessment: Acute upper respiratory tract presentation with stable hemodynamics. Recommended Outpatient consultation within 24-48 hours.
-              </p>
-              <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-100">
-                <span>Apollo Hospitals Chennai</span>
-                <span>Sep 02, 2026 • 10:30 AM</span>
-              </div>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2.5 shadow-2xs">
-              <div className="flex items-center justify-between">
-                <span className="font-mono font-bold text-slate-700">RPT-INTAKE-2026-002</span>
-                <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-bold">
-                  LOW RISK
-                </span>
-              </div>
-              <p className="font-bold text-slate-900">Mild seasonal rhinitis and nasal congestion</p>
-              <p className="text-slate-600 text-[11px] leading-relaxed">
-                Preliminary Assessment: Self-limiting allergic/viral rhinitis. Recommended home hydration, saline nasal spray, and symptom monitoring.
-              </p>
-              <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-100">
-                <span>Apollo Hospitals Chennai</span>
-                <span>Aug 10, 2026 • 09:15 AM</span>
-              </div>
-            </div>
+            ))}
+            {!intakeReports.length && <p className="text-sm text-slate-500">No saved AI intake reports are available.</p>}
           </div>
         </div>
 
@@ -911,7 +686,7 @@ export default function MedicalTimelinePage() {
                   </div>
                   <div>
                     <h3 className="text-base font-black text-slate-900">AI Longitudinal Health Trajectory Summary</h3>
-                    <p className="text-xs text-slate-400">Synthesized across Apollo, Fortis, and AIIMS records</p>
+                    <p className="text-xs text-slate-400">Generated from your saved records.</p>
                   </div>
                 </div>
                 <button

@@ -111,7 +111,6 @@ export default function ClinicalIntakePage() {
   // Structured Triage Report State
   const [evaluatingReport, setEvaluatingReport] = useState(false);
   const [completedReport, setCompletedReport] = useState<IntakeReportData | null>(null);
-  const [reportSaved, setReportSaved] = useState(false);
 
   // Dynamic quick response choices for the guided nurse interview
   const getQuickChoices = () => {
@@ -257,92 +256,58 @@ export default function ClinicalIntakePage() {
     }
   };
 
-  // Generate and Save Clinical Intake Report (No Queue Token, No Appointment Booking!)
+  // Generate and persist the authenticated patient's intake report.
   const handleCompleteAssessment = async () => {
-    setEvaluatingReport(true);
-
-    const fullConversation = messages.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join("\n");
-    const lowerConv = fullConversation.toLowerCase();
-
-    // Determine clinical risk level
-    let riskLevel: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" = "LOW";
-    if (lowerConv.includes("chest") || lowerConv.includes("left arm") || lowerConv.includes("breathless") || lowerConv.includes("stroke")) {
-      riskLevel = "CRITICAL";
-    } else if (lowerConv.includes("severe") || lowerConv.includes("pain 8") || lowerConv.includes("pain 9") || lowerConv.includes("high fever")) {
-      riskLevel = "HIGH";
-    } else if (lowerConv.includes("moderate") || lowerConv.includes("2 days") || lowerConv.includes("fever")) {
-      riskLevel = "MEDIUM";
+    if (!user || user.role !== "PATIENT" || !user.id) {
+      toast.error("Sign in with a patient account to save your intake report.");
+      return;
     }
 
+    setEvaluatingReport(true);
+    setCompletedReport(null);
     try {
-      // Call Gemini Synthesize
       const res = await api.ai.synthesizeIntake({
         messages: messages.map((m) => ({ role: m.role, content: m.content })),
-        vitals,
+        vitals: {},
         spoken_language: language,
       });
+      if (!res.success || !res.data) throw new Error("Intake synthesis did not return a report.");
 
+      const triageToRisk: Record<string, IntakeReportData["risk"]> = {
+        ESI_1_RESUSCITATION: "CRITICAL",
+        ESI_2_EMERGENT: "HIGH",
+        ESI_3_URGENT: "MEDIUM",
+        ESI_4_LESS_URGENT: "LOW",
+        ESI_5_NON_URGENT: "LOW",
+      };
+      const riskLevel = triageToRisk[res.data.triage_level];
+      if (!riskLevel) throw new Error("Intake synthesis did not return a recognized triage level.");
+
+      const plan = res.data.medical_summary?.plan || "";
       const reportPayload: IntakeReportData = {
-        report_id: `RPT-INTAKE-${Math.floor(100000 + Math.random() * 900000)}`,
-        patient_name: user?.full_name || "Vikram Malhotra",
-        date: new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }),
-        chief_complaint: res.data?.chief_complaint || "Acute symptomatic clinical presentation",
-        symptoms: res.data?.symptoms || ["Fever", "Sore throat", "Body ache"],
-        duration: res.data?.duration || "2 days",
-        severity: res.data?.possible_severity || (riskLevel === "LOW" ? "Mild" : riskLevel === "MEDIUM" ? "Moderate" : "Severe"),
+        report_id: "",
+        patient_name: user.full_name,
+        date: "",
+        chief_complaint: res.data.chief_complaint,
+        symptoms: res.data.symptoms,
+        duration: res.data.duration,
+        severity: res.data.possible_severity,
         risk: riskLevel,
-        medical_history: ["Essential Hypertension (ICD-10 I10)", "Type 2 Diabetes Mellitus (ICD-10 E11)"],
-        current_medications: ["Telmisartan 40mg OD", "Metformin 500mg SR BD"],
-        allergies: ["Penicillin Anaphylaxis (CRITICAL RED FLAG)"],
-        vitals: {
-          bp: vitals.bp,
-          hr: vitals.hr,
-          spo2: vitals.spo2,
-          temperature: vitals.temperature,
-        },
-        preliminary_assessment:
-          riskLevel === "CRITICAL"
-            ? "Potential Acute Coronary Syndrome or Critical Emergency. Immediate in-person resuscitation and emergency evaluation required."
-            : riskLevel === "HIGH"
-            ? "Acute symptomatic presentation with significant discomfort. In-person specialist consultation recommended today."
-            : riskLevel === "MEDIUM"
-            ? "Acute upper respiratory / viral presentation with stable hemodynamics. Outpatient consultation recommended within 24-48 hours."
-            : "Mild self-limiting upper respiratory symptoms with normal IoT vitals. Home hydration, rest, and conservative symptom monitoring recommended.",
-        suggested_otc_medicines:
-          riskLevel === "LOW" || riskLevel === "MEDIUM"
-            ? ["Paracetamol 650mg SOS for fever / discomfort", "Saline Nasal Spray as needed", "Oral Rehydration Salts (ORS) Hydration"]
-            : [],
-        recommended_department:
-          riskLevel === "CRITICAL"
-            ? "Emergency Medicine & Trauma Center"
-            : lowerConv.includes("chest")
-            ? "Cardiology OPD"
-            : lowerConv.includes("knee") || lowerConv.includes("joint")
-            ? "Orthopedics OPD"
-            : "General Medicine OPD",
-        recommended_action:
-          riskLevel === "CRITICAL"
-            ? "Trigger Emergency SOS or visit the nearest Hospital Emergency Department immediately."
-            : riskLevel === "HIGH"
-            ? "Schedule an immediate in-person consultation with an on-duty specialist today."
-            : riskLevel === "MEDIUM"
-            ? "Schedule an Outpatient consultation within 24 to 48 hours. Monitor temperature."
-            : "Rest at home, drink plenty of fluids (warm water/electrolytes), and monitor symptoms.",
-        warning_signs: [
-          "High fever exceeding 102°F persisting for more than 3 days",
-          "Shortness of breath, chest heaviness, or blue lips",
-          "Severe dizziness, confusion, or inability to keep fluids down",
-        ],
-        follow_up: "Consult an Outpatient Physician if symptoms worsen or do not resolve within 48 hours.",
+        medical_history: [],
+        current_medications: [],
+        allergies: [],
+        vitals: { bp: "Not recorded", hr: "Not recorded", spo2: "Not recorded", temperature: "Not recorded" },
+        preliminary_assessment: res.data.triage_reasoning,
+        suggested_otc_medicines: [],
+        recommended_department: res.data.suggested_department,
+        recommended_action: plan,
+        warning_signs: [],
+        follow_up: plan,
         disclaimer: "This is an AI-assisted preliminary assessment and not a confirmed medical diagnosis.",
       };
 
-      setCompletedReport(reportPayload);
-
-      // Save report automatically into Patient Case History
-      await api.ai.saveIntakeReport({
-        patient_id: user?.id || "569589b7-bcd1-49e7-a886-dd5199c46838",
-        hospital_name: selectedHospital?.name || "Apollo Hospitals Chennai",
+      const saved = await api.ai.saveIntakeReport({
+        hospital_name: selectedHospital?.name,
         chief_complaint: reportPayload.chief_complaint,
         symptoms: reportPayload.symptoms,
         duration: reportPayload.duration,
@@ -359,12 +324,27 @@ export default function ClinicalIntakePage() {
         warning_signs: reportPayload.warning_signs,
         follow_up: reportPayload.follow_up,
         disclaimer: reportPayload.disclaimer,
+        triage_level: res.data.triage_level,
+        triage_reasoning: res.data.triage_reasoning,
+        is_emergency: res.data.is_emergency,
+        confidence_score: res.data.confidence_score,
+        medical_summary: res.data.medical_summary,
       });
+      if (!saved.success || !saved.data?.report_id || !saved.data.created_at) {
+        throw new Error(saved.message || "The intake report was not saved.");
+      }
 
-      setReportSaved(true);
-      toast.success("✨ AI Clinical Intake Report generated & saved to Case History!");
+      const persistedReport = saved.data.report_data as Partial<IntakeReportData>;
+      setCompletedReport({
+        ...reportPayload,
+        ...persistedReport,
+        report_id: saved.data.report_id,
+        date: new Date(saved.data.created_at).toLocaleString(),
+      });
+      toast.success("AI Clinical Intake Report saved to Case History.");
     } catch {
-      toast.info("Clinical assessment synthesized.");
+      setCompletedReport(null);
+      toast.error("Could not save the AI Clinical Intake Report. Please try again.");
     } finally {
       setEvaluatingReport(false);
     }

@@ -1,9 +1,11 @@
 from typing import Any, Dict, List, Optional
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user, get_current_user_optional, require_role, require_any_role
+from app.schemas.auth import CurrentUser
 from app.models.models import (
     UserRoleEnum,
     AuditActionEnum,
@@ -14,6 +16,8 @@ from app.models.models import (
     MedicalReport,
     MedicalHistory,
     MedicineIntakeSchedule,
+    VitalsRecord,
+    Doctor,
 )
 
 from app.schemas.common import APIResponse
@@ -47,6 +51,8 @@ from app.schemas.ai import (
 )
 from app.services.ai_service import AIService
 from app.services.audit_service import AuditService
+from app.services.intake_report_service import IntakeReportService
+from app.services.consent_service import ConsentService
 
 router = APIRouter()
 
@@ -197,25 +203,22 @@ def doctor_copilot_summarize_history(
 def patient_health_assistant_chat(
     req: PatientAssistantChatRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user_optional),
+    current_user: CurrentUser = Depends(require_role(UserRoleEnum.PATIENT)),
 ):
     """
     Patient Health Assistant: Answers patient queries grounded in their verified medical records.
     (e.g., "What medicines am I taking?", "When is my next dose?", "What happened in my previous visit?")
     """
-    patient_id = getattr(current_user, "patient_id", None) or getattr(current_user, "id", None)
-    patient = None
-    if patient_id:
-        patient = db.query(Patient).filter(Patient.id == patient_id).first()
+    patient_id = current_user.patient_id or current_user.id
+    patient = db.query(Patient).filter(Patient.id == patient_id).first()
     if not patient:
-        patient = db.query(Patient).first()
+        raise HTTPException(status_code=404, detail="Patient not found")
 
-
-    patient_name = f"{patient.first_name} {patient.last_name}" if patient else "Patient"
+    patient_name = f"{patient.first_name} {patient.last_name}"
     patient_profile = {
-        "date_of_birth": str(patient.date_of_birth) if patient else "1990-01-01",
-        "gender": patient.gender.value if patient else "MALE",
-        "blood_group": patient.blood_group if patient else "O+",
+        "date_of_birth": str(patient.date_of_birth) if patient.date_of_birth else None,
+        "gender": patient.gender.value if patient.gender else None,
+        "blood_group": patient.blood_group.value if hasattr(patient.blood_group, "value") else patient.blood_group,
     }
 
     # Query active prescriptions
@@ -264,7 +267,8 @@ def patient_health_assistant_chat(
 
         diagnoses = [{"diagnosis_name": d.diagnosis_name, "icd10": d.icd10_code} for d in diags]
 
-    res = AIService.patient_health_assistant(
+    try:
+        res = AIService.patient_health_assistant(
         query=req.query,
         patient_name=patient_name,
         patient_profile=patient_profile,
@@ -272,7 +276,9 @@ def patient_health_assistant_chat(
         intake_schedules=intake_schedules,
         recent_visits=recent_visits,
         diagnoses=diagnoses,
-    )
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail="Patient health assistant is temporarily unavailable") from exc
     return APIResponse(success=True, message="Health assistant response generated", data=res)
 
 
@@ -310,14 +316,7 @@ def explain_prescription(
         items_to_explain = [item.model_dump() for item in req.items]
 
     if not items_to_explain:
-        items_to_explain = [
-            {
-                "medicine_name": "Augmentin 625 Duo",
-                "dosage_instruction": "1 Tablet twice daily after food",
-                "frequency": "TWICE_DAILY",
-                "duration_days": 5,
-            }
-        ]
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A saved prescription or prescription items are required")
 
     res = AIService.explain_prescription(
         items=items_to_explain,
@@ -392,7 +391,7 @@ def check_drug_interactions(
 @router.post("/appointment/route", response_model=APIResponse[AIAppointmentRouteResponse])
 def route_smart_appointment(
     req: AIAppointmentRouteRequest,
-    current_user: Any = Depends(get_current_user_optional),
+    current_user: CurrentUser = Depends(require_role(UserRoleEnum.PATIENT)),
 ):
     """
     AI-Powered Appointment Routing:
@@ -401,13 +400,16 @@ def route_smart_appointment(
     - Never overrides user's explicit hospital choice if provided.
     - Supports multilingual output (en, ta, hi, te, kn, ml).
     """
-    res = AIService.route_smart_appointment(
-        symptoms=req.symptoms,
-        selected_hospital=req.selected_hospital,
-        preferred_doctor=req.preferred_doctor,
-        user_location=req.user_location,
-        language=req.language or "en",
-    )
+    try:
+        res = AIService.route_smart_appointment(
+            symptoms=req.symptoms,
+            selected_hospital=req.selected_hospital,
+            preferred_doctor=req.preferred_doctor,
+            user_location=req.user_location,
+            language=req.language or "en",
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail="AI appointment routing is temporarily unavailable") from exc
     return APIResponse(success=True, message="AI appointment recommendation generated", data=res)
 
 
@@ -418,127 +420,102 @@ def route_smart_appointment(
 def get_ai_case_summary(
     req: AICaseSummaryRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user_optional),
+    current_user: CurrentUser = Depends(require_any_role([UserRoleEnum.PATIENT, UserRoleEnum.DOCTOR])),
 ):
-    """
-    Generates structured AI clinical case summary for doctor workstation:
-    Age, Gender, Major Diseases, Current Complaint, Current Medicines, Allergies, Recent Lab Findings,
-    Possible Diagnosis, Recommended Tests, Risk Level.
-    """
-    patient = db.query(Patient).filter(Patient.id == req.patient_id).first()
+    """Generate a summary only from persisted patient records and authorized identity."""
+    if current_user.role == UserRoleEnum.PATIENT.value:
+        patient_id = current_user.patient_id or current_user.id
+        if req.patient_id != patient_id:
+            raise HTTPException(status_code=404, detail="Patient records not found")
+    else:
+        doctor = db.query(Doctor).filter(Doctor.id == current_user.doctor_id).first() if current_user.doctor_id else None
+        if not doctor or not ConsentService.check_active_consent(db, req.patient_id, doctor.id):
+            raise HTTPException(status_code=403, detail="Active patient consent is required")
+        patient_id = req.patient_id
+
+    patient = db.query(Patient).filter(Patient.id == patient_id).first()
     if not patient:
-        patient = db.query(Patient).filter(Patient.primary_phone == "9876543210").first()
+        raise HTTPException(status_code=404, detail="Patient not found")
+    age = max(0, date.today().year - patient.date_of_birth.year - ((date.today().month, date.today().day) < (patient.date_of_birth.month, patient.date_of_birth.day))) if patient.date_of_birth else 0
+    visits = db.query(Visit).filter(Visit.patient_id == patient_id).order_by(Visit.created_at.desc()).all()
+    diagnoses = db.query(Diagnosis).filter(Diagnosis.patient_id == patient_id).order_by(Diagnosis.created_at.desc()).all()
+    prescriptions = db.query(Prescription).filter(Prescription.patient_id == patient_id).order_by(Prescription.created_at.desc()).all()
+    histories = db.query(MedicalHistory).filter(MedicalHistory.patient_id == patient_id, MedicalHistory.is_active.is_(True)).all()
+    reports = db.query(MedicalReport).filter(MedicalReport.patient_id == patient_id, MedicalReport.ai_summary.isnot(None)).order_by(MedicalReport.created_at.desc()).all()
+    latest_vitals = None
+    for visit in visits:
+        latest_vitals = db.query(VitalsRecord).filter(VitalsRecord.visit_id == visit.id).order_by(VitalsRecord.created_at.desc()).first()
+        if latest_vitals:
+            break
+    vitals = {}
+    if latest_vitals:
+        vitals = {key: getattr(latest_vitals, key) for key in ("systolic_bp", "diastolic_bp", "heart_rate_bpm", "oxygen_saturation_spo2", "body_temperature_celsius", "body_weight_kg", "body_height_cm") if getattr(latest_vitals, key) is not None}
+    diagnosis_names = [f"{d.diagnosis_name} ({d.icd10_code})" for d in diagnoses]
+    medications = [f"{item.medicine.brand_name} {item.medicine.strength}: {item.dosage_instruction}" for rx in prescriptions for item in rx.items if item.medicine]
+    allergies = [h.condition_name + (f" ({h.severity})" if h.severity else "") for h in histories if h.history_type.upper() == "ALLERGY"]
+    lab_reports = [r.ai_summary for r in reports if r.ai_summary]
+    latest_visit = visits[0] if visits else None
+    chief_complaint = latest_visit.chief_complaint_raw if latest_visit and latest_visit.chief_complaint_raw else ""
 
-    patient_name = f"{patient.first_name} {patient.last_name}" if patient else "Vikram Malhotra"
-    age = 38
-    if patient and getattr(patient, "date_of_birth", None):
-        age = max(1, 2026 - patient.date_of_birth.year)
-    gender = patient.gender.value if (patient and hasattr(patient.gender, "value")) else "MALE"
-    blood_group = patient.blood_group.value if (patient and hasattr(patient.blood_group, "value")) else "O+"
-    mrn = patient.hospital_mrn if (patient and getattr(patient, "hospital_mrn", None)) else "MRN-2026-10001"
-    abha = patient.national_health_id if (patient and getattr(patient, "national_health_id", None)) else "91-4920-8831-0941"
-
-    vitals = {
-        "heart_rate": "76 bpm",
-        "blood_pressure": "120/80 mmHg",
-        "spo2": "98%",
-        "temperature": "98.4 F",
-    }
-    diagnoses = ["Essential Hypertension (ICD-10 I10)", "Type 2 Diabetes Mellitus (ICD-10 E11)"]
-    medications = ["Telmisartan 40mg OD (Morning)", "Metformin 500mg SR BD (With meals)"]
-    allergies = ["Penicillin Anaphylaxis (Severe)", "Sulfa Drugs (Mild rash)"]
-    lab_reports = ["ECG 12-Lead: Normal Sinus Rhythm", "HbA1c: 6.8%", "Serum Creatinine: 0.9 mg/dL"]
-    chief_complaint = "Acute viral URI with low-grade fever, sore throat, and body ache"
-
-    res = AIService.generate_case_summary(
-        patient_name=patient_name,
-        age=age,
-        gender=gender,
-        blood_group=blood_group,
-        mrn=mrn,
-        national_health_id=abha,
-        chief_complaint=chief_complaint,
-        vitals=vitals,
-        diagnoses=diagnoses,
-        medications=medications,
-        allergies=allergies,
-        lab_reports=lab_reports,
-        language=req.language or "en",
-    )
-    return APIResponse(success=True, message="AI Clinical Summary synthesized", data=res)
-
-
+    try:
+        result = AIService.generate_case_summary(
+            patient_name=f"{patient.first_name} {patient.last_name}", age=age,
+            gender=patient.gender.value if patient.gender else "UNDISCLOSED",
+            blood_group=patient.blood_group.value if patient.blood_group else "",
+            mrn=patient.hospital_mrn or "", national_health_id=patient.national_health_id or "",
+            chief_complaint=chief_complaint, vitals=vitals, diagnoses=diagnosis_names,
+            medications=medications, allergies=allergies, lab_reports=lab_reports,
+            language=req.language or "en",
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail="AI case summary synthesis failed") from exc
+    return APIResponse(success=True, message="Patient case summary generated from saved records", data=result)
 # -----------------------------------------------------------------------------
 # 10. AI CLINICAL INTAKE REPORT PERSISTENCE (Case History)
 # -----------------------------------------------------------------------------
-# In-memory persistent store for AI Clinical Intake Reports
-_ai_intake_reports_store: List[Dict[str, Any]] = []
-
 @router.post("/intake/save-report", response_model=APIResponse[SaveIntakeReportResponse])
 def save_clinical_intake_report(
     req: SaveIntakeReportRequest,
     db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user_optional),
+    current_user: CurrentUser = Depends(require_role(UserRoleEnum.PATIENT)),
 ):
-    """
-    Saves the AI Clinical Intake Assessment Report into the Patient's Case History.
-    DOES NOT generate queue tokens, appointments, or prescriptions.
-    """
-    import uuid
-    from datetime import datetime, timezone
+    """Persist the authenticated patient's self-service AI intake report."""
+    patient_id = current_user.patient_id
+    if not patient_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authenticated patient identity is unavailable")
+    if req.patient_id and req.patient_id != patient_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot save an intake report for another patient")
 
-    report_id = f"RPT-INTAKE-{uuid.uuid4().hex[:8].upper()}"
-    p_id = req.patient_id or "569589b7-bcd1-49e7-a886-dd5199c46838"
-    saved_time = datetime.now(timezone.utc).isoformat()
+    report_data = req.model_dump(exclude={"patient_id"}, mode="json")
+    report = IntakeReportService.create_report(db, patient_id, report_data)
 
-    report_record = {
-        "id": report_id,
-        "patient_id": p_id,
-        "created_at": saved_time,
-        "hospital_name": req.hospital_name or "Apollo Hospitals Chennai",
-        "chief_complaint": req.chief_complaint,
-        "symptoms": req.symptoms,
-        "duration": req.duration,
-        "severity": req.severity,
-        "risk": req.risk,
-        "medical_history": req.medical_history or ["Essential Hypertension", "Type 2 Diabetes"],
-        "current_medications": req.current_medications or ["Telmisartan 40mg OD", "Metformin 500mg BD"],
-        "allergies": req.allergies or ["Penicillin Anaphylaxis"],
-        "vitals": req.vitals or {"bp": "120/80 mmHg", "hr": "76 BPM", "spo2": "98%", "temperature": "98.4 °F"},
-        "preliminary_assessment": req.preliminary_assessment,
-        "suggested_otc_medicines": req.suggested_otc_medicines or ["Paracetamol 650mg SOS", "ORS Hydration"],
-        "recommended_department": req.recommended_department,
-        "recommended_action": req.recommended_action,
-        "warning_signs": req.warning_signs or ["High fever >3 days", "Shortness of breath"],
-        "follow_up": req.follow_up,
-        "disclaimer": req.disclaimer,
-    }
-
-    _ai_intake_reports_store.append(report_record)
-
-    # Also log to Audit Ledger
+    # Audit metadata identifies the record without duplicating clinical content.
     try:
-        AuditService.log(
+        AuditService.log_event(
             db,
-            user_id=p_id,
             action=AuditActionEnum.CREATE,
             target_table="ai_intake_reports",
-            target_id=report_id,
-            new_values={"risk": req.risk, "department": req.recommended_department},
-            severity="INFO",
+            target_record_id=report.id,
+            actor_user_id=current_user.id,
+            actor_role=current_user.role,
+            actor_name=current_user.full_name,
+            description="AI intake report saved",
+            new_state={"schema_version": IntakeReportService.PAYLOAD_VERSION},
         )
     except Exception:
         pass
 
     return APIResponse(
         success=True,
-        message="AI Clinical Intake Report saved to Patient Case History successfully",
+        message="AI Clinical Intake Report saved successfully",
         data=SaveIntakeReportResponse(
-            report_id=report_id,
-            patient_id=p_id,
-            saved_at=saved_time,
+            report_id=report.id,
+            patient_id=patient_id,
+            saved_at=report.created_at.isoformat(),
+            created_at=report.created_at,
             status="SAVED_TO_CASE_HISTORY",
-            message="Your AI Clinical Intake Report has been securely committed to your longitudinal medical dossier.",
+            message="Your AI Clinical Intake Report was saved.",
+            report_data=report.report_data,
         ),
     )
 
@@ -546,81 +523,35 @@ def save_clinical_intake_report(
 @router.get("/intake/reports/{patient_id}", response_model=APIResponse[List[IntakeReportItem]])
 def get_patient_intake_reports(
     patient_id: str,
-    current_user: Any = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_role(UserRoleEnum.PATIENT)),
 ):
-    """
-    Retrieves all AI Clinical Intake Reports for a given patient's Case History timeline.
-    """
-    reports = [r for r in _ai_intake_reports_store if r["patient_id"] == patient_id]
-    if not reports:
-        # Provide baseline seeded report for demonstration
-        reports = [
-            {
-                "id": "RPT-INTAKE-2026-001",
-                "patient_id": patient_id,
-                "created_at": "2026-09-02T10:30:00Z",
-                "hospital_name": "Apollo Hospitals Chennai",
-                "chief_complaint": "Acute viral upper respiratory tract symptoms with low-grade fever",
-                "symptoms": ["Fever (99.8 F)", "Sore throat", "Body ache", "Dry cough"],
-                "duration": "2 days",
-                "severity": "Moderate",
-                "risk": "MEDIUM",
-                "medical_history": ["Essential Hypertension", "Type 2 Diabetes"],
-                "current_medications": ["Telmisartan 40mg OD", "Metformin 500mg SR BD"],
-                "allergies": ["Penicillin Anaphylaxis"],
-                "vitals": {"bp": "120/80 mmHg", "hr": "76 BPM", "spo2": "98%", "temperature": "98.4 °F"},
-                "preliminary_assessment": "Patient demonstrates acute viral URI signs without respiratory compromise or hemodynamic instability. Background hypertension is well controlled.",
-                "suggested_otc_medicines": ["Paracetamol 650mg SOS for fever", "Saline Nasal Spray as needed", "Oral Rehydration Salts (ORS)"],
-                "recommended_department": "General Medicine OPD",
-                "recommended_action": "Schedule an Outpatient consultation within 24-48 hours if fever persists.",
-                "warning_signs": ["Fever above 102°F lasting >3 days", "Difficulty breathing or chest pain", "Inability to tolerate liquids"],
-                "follow_up": "Review with primary physician in 48 hours.",
-                "disclaimer": "This is an AI-assisted preliminary assessment and not a confirmed medical diagnosis.",
-            }
-        ]
-    return APIResponse(success=True, message="Intake reports retrieved", data=reports)
+    """Retrieve persisted AI intake reports for the authenticated patient."""
+    _require_intake_report_owner(patient_id, current_user)
+    reports = IntakeReportService.get_reports_for_patient(db, patient_id)
+    items = [IntakeReportService.to_response_item(report) for report in reports]
+    return APIResponse(success=True, message="Intake reports retrieved", data=items)
 
 
 @router.get("/intake/latest/{patient_id}", response_model=APIResponse[Optional[IntakeReportItem]])
 def get_latest_patient_intake_report(
     patient_id: str,
-    current_user: Any = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_role(UserRoleEnum.PATIENT)),
 ):
-    """
-    Retrieves the single latest active AI Clinical Intake Report for the patient.
-    Single source of truth for Appointment Booking.
-    """
-    reports = [r for r in _ai_intake_reports_store if r["patient_id"] == patient_id]
-    if reports:
-        return APIResponse(success=True, message="Latest AI intake report retrieved", data=reports[-1])
-
-    # Default active intake assessment for demo
-    active_report = {
-        "id": "RPT-INTAKE-2026-001",
-        "patient_id": patient_id,
-        "created_at": "2026-09-03T07:15:00Z",
-        "hospital_name": "Apollo Hospitals Chennai",
-        "chief_complaint": "Chest pain with breathing difficulty",
-        "symptoms": ["Intermittent substernal chest pressure", "Radiation to left shoulder", "Mild shortness of breath", "Diaphoresis"],
-        "duration": "2 days",
-        "severity": "Severe (8/10)",
-        "risk": "HIGH",
-        "medical_history": ["Essential Hypertension (ICD-10 I10)", "Type 2 Diabetes (ICD-10 E11)"],
-        "current_medications": ["Telmisartan 40mg OD", "Metformin 500mg SR BD"],
-        "allergies": ["Penicillin Anaphylaxis (Critical Red Flag)"],
-        "vitals": {"bp": "128/82 mmHg", "hr": "78 BPM", "spo2": "98%", "temperature": "98.4 °F"},
-        "preliminary_assessment": "Patient reports intermittent chest pain radiating to left shoulder with mild shortness of breath on exertion. AI recommends urgent cardiology consultation and 12-lead ECG evaluation.",
-        "suggested_otc_medicines": [],
-        "recommended_department": "Cardiology",
-        "recommended_action": "Urgent in-person cardiology consultation recommended today. Avoid physical exertion.",
-        "warning_signs": ["Sudden worsening crushing chest pressure", "Severe breathlessness or syncope", "Cold sweats"],
-        "follow_up": "Immediate clinical review by attending cardiologist.",
-        "disclaimer": "This is an AI-assisted preliminary assessment and not a confirmed medical diagnosis.",
-    }
-    return APIResponse(success=True, message="Active AI intake report loaded", data=active_report)
+    """Retrieve the latest persisted report, or null when none exists."""
+    _require_intake_report_owner(patient_id, current_user)
+    report = IntakeReportService.get_latest_report(db, patient_id)
+    data = IntakeReportService.to_response_item(report) if report else None
+    message = "Latest AI intake report retrieved" if report else "No saved AI intake report"
+    return APIResponse(success=True, message=message, data=data)
 
 
-# -----------------------------------------------------------------------------
+def _require_intake_report_owner(patient_id: str, current_user: CurrentUser) -> None:
+    if not current_user.patient_id or patient_id != current_user.patient_id:
+        # 404 avoids disclosing whether another patient's report exists.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Intake report not found")
+
 # 11. AI MEDICATION CHAT & ADHERENCE Q&A
 # -----------------------------------------------------------------------------
 @router.post("/medication/chat", response_model=APIResponse[AIMedicationChatResponse])
@@ -644,125 +575,100 @@ def chat_medication_assistant(
 
 
 # -----------------------------------------------------------------------------
-# 12. AI MEDICAL REPORT INTELLIGENCE & PLAIN LANGUAGE EXPLAINER
+# 12. AI MEDICAL REPORT INTELLIGENCE & PERSISTENCE
 # -----------------------------------------------------------------------------
-# In-memory store for AI analyzed reports
-_analyzed_reports_store: list[dict[str, Any]] = []
-
 @router.post("/reports/analyze-and-explain", response_model=APIResponse[MedicalReportExplainResponse])
 def analyze_and_explain_report(
     req: MedicalReportExplainRequest,
-    current_user: Any = Depends(get_current_user_optional),
+    current_user: CurrentUser = Depends(require_role(UserRoleEnum.PATIENT)),
+    db: Session = Depends(get_db),
 ):
-    """
-    Production-ready AI Medical Report Intelligence:
-    Performs clinical term extraction, plain-language translation, visual card structuring,
-    and automatic case history persistence.
-    """
-    if req.image_quality == "POOR" or req.image_quality == "BLURRY":
-        return APIResponse(
-            success=False,
-            message="Image quality is poor or blurry. Please retake photo with clear lighting.",
-            error="IMAGE_QUALITY_POOR",
-        )
+    """Explain OCR from the authenticated patient's report and persist it to that report."""
+    patient_id = current_user.patient_id or current_user.id
+    if req.patient_id and req.patient_id != patient_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot analyze a report for another patient")
+    if req.image_quality in {"POOR", "BLURRY"}:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Image quality is poor or blurry. Please upload a clearer report.")
 
-    res = AIService.explain_medical_report(
-        extracted_text=req.extracted_text,
+    report = None
+    extracted_text = req.extracted_text.strip()
+    if req.medical_report_id:
+        report = db.query(MedicalReport).filter(
+            MedicalReport.id == req.medical_report_id,
+            MedicalReport.patient_id == patient_id,
+        ).first()
+        if not report:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medical report not found")
+        if not report.ocr_result or not (report.ocr_result.raw_extracted_text or "").strip():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Run OCR successfully before generating the report explanation")
+        extracted_text = report.ocr_result.raw_extracted_text.strip()
+    if not extracted_text:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Extracted report text is required")
+
+    result = AIService.explain_medical_report(
+        extracted_text=extracted_text,
         document_type=req.document_type,
         language=req.language or "en",
-        patient_id=req.patient_id,
-        hospital_name=req.hospital_name or "Apollo Hospitals Chennai",
+        patient_id=patient_id,
+        hospital_name=req.hospital_name,
     )
+    result.saved_to_case_history = False
+    if report:
+        result.saved_to_case_history = True
+        persisted = result.model_dump(mode="json")
+        report.ai_summary = result.summary_plain_english
+        existing = dict(report.fhir_diagnostic_report_payload or {})
+        existing["ai_explanation"] = persisted
+        report.fhir_diagnostic_report_payload = existing
+        try:
+            db.commit()
+            db.refresh(report)
+        except Exception:
+            db.rollback()
+            raise
 
-    # Store into Case History store
-    p_id = req.patient_id or "569589b7-bcd1-49e7-a886-dd5199c46838"
-    import uuid
-    from datetime import datetime, timezone
-    
-    report_record = {
-        "id": f"RPT-INTEL-{uuid.uuid4().hex[:8].upper()}",
-        "patient_id": p_id,
-        "date": datetime.now().strftime("%B %d, %Y"),
-        "title": res.report_title,
-        "document_type": req.document_type,
-        "overall_status": res.overall_status,
-        "summary": res.summary_plain_english,
-        "parameters": [p.dict() for p in res.parameters],
-        "specialist": res.recommended_specialist,
-        "urgency": res.urgency,
-        "diet_advice": res.diet_advice,
-        "language": req.language or "en",
-    }
-    _analyzed_reports_store.insert(0, report_record)
-
-    return APIResponse(
-        success=True,
-        message="Medical report analyzed and simplified into plain language",
-        data=res,
-    )
+    message = "Medical report analysis saved to case history" if result.saved_to_case_history else "Medical report analysis generated"
+    return APIResponse(success=True, message=message, data=result)
 
 
 @router.get("/reports/dossier/{patient_id}", response_model=Dict[str, Any])
 def get_patient_analyzed_reports_dossier(
     patient_id: str,
     query: Optional[str] = None,
+    current_user: CurrentUser = Depends(require_role(UserRoleEnum.PATIENT)),
+    db: Session = Depends(get_db),
 ):
-    """
-    Retrieves all AI analyzed reports with keyword search support (e.g. Creatinine, Diabetes, MRI).
-    """
-    reports = [r for r in _analyzed_reports_store if r["patient_id"] == patient_id]
-    if not reports:
-        # Default seeded report for instant demo
-        reports = [
-            {
-                "id": "RPT-INTEL-2026-001",
-                "patient_id": patient_id,
-                "date": "August 28, 2026",
-                "title": "Comprehensive Blood & Metabolic Panel",
-                "document_type": "BLOOD_TEST",
-                "overall_status": "MILD_CONCERN",
-                "summary": "Kidney, liver, and blood sugar levels are healthy. Hemoglobin (11.2 g/dL) is slightly low, indicating mild anemia.",
-                "parameters": [
-                    {
-                        "name": "Hemoglobin (Hb)",
-                        "value": "11.2",
-                        "unit": "g/dL",
-                        "reference_range": "12.0 - 15.5",
-                        "status": "BORDERLINE",
-                        "meaning": "Your blood carries slightly less oxygen than normal.",
-                        "recommendation": "Eat spinach, beans, and lentils.",
-                        "category": "Blood Counts"
-                    },
-                    {
-                        "name": "Serum Creatinine",
-                        "value": "0.9",
-                        "unit": "mg/dL",
-                        "reference_range": "0.7 - 1.3",
-                        "status": "NORMAL",
-                        "meaning": "Kidney function is normal.",
-                        "recommendation": "Drink 2-3L water daily.",
-                        "category": "Kidney Function"
-                    }
-                ],
-                "specialist": "General Physician",
-                "urgency": "Not urgent - Book General Physician within 7 days",
-                "diet_advice": ["Spinach and green vegetables", "Iron-rich lentils"],
-                "language": "en",
-            }
-        ]
-
+    """Read saved AI explanations from the authenticated patient's medical report records."""
+    if patient_id != (current_user.patient_id or current_user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medical reports not found")
+    rows = db.query(MedicalReport).filter(
+        MedicalReport.patient_id == patient_id,
+        MedicalReport.fhir_diagnostic_report_payload.isnot(None),
+    ).order_by(MedicalReport.created_at.desc()).all()
+    reports = []
+    for row in rows:
+        explanation = (row.fhir_diagnostic_report_payload or {}).get("ai_explanation")
+        if not explanation:
+            continue
+        item = {
+            "id": row.id,
+            "patient_id": row.patient_id,
+            "date": row.created_at.isoformat() if row.created_at else None,
+            "title": row.title,
+            "document_type": explanation.get("test_type", row.report_type.value),
+            "overall_status": explanation.get("overall_status"),
+            "summary": explanation.get("summary_plain_english"),
+            "parameters": explanation.get("parameters", []),
+            "specialist": explanation.get("recommended_specialist"),
+            "urgency": explanation.get("urgency"),
+            "diet_advice": explanation.get("diet_advice", []),
+            "language": explanation.get("language", "en"),
+        }
+        reports.append(item)
     if query:
-        q = query.lower()
-        reports = [
-            r for r in reports
-            if q in r["title"].lower()
-            or q in r["summary"].lower()
-            or q in r["document_type"].lower()
-            or any(q in p["name"].lower() or q in p["meaning"].lower() for p in r.get("parameters", []))
-        ]
-
-    return {
-        "success": True,
-        "count": len(reports),
-        "reports": reports,
-    }
+        term = query.casefold()
+        reports = [item for item in reports if term in (item.get("title") or "").casefold()
+                   or term in (item.get("summary") or "").casefold()
+                   or term in (item.get("document_type") or "").casefold()
+                   or any(term in str(param.get("name", "")).casefold() or term in str(param.get("meaning", "")).casefold() for param in item.get("parameters", []))]
+    return {"success": True, "count": len(reports), "reports": reports}

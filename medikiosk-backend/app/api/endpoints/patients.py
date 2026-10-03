@@ -56,6 +56,15 @@ def add_medical_history(
     return APIResponse(success=True, message="Medical history entry recorded", data=item)
 
 
+@router.get("/medical-history", response_model=APIResponse[List[MedicalHistoryItemSchema]])
+def get_medical_history(
+    current_user: CurrentUser = Depends(require_role(UserRoleEnum.PATIENT)),
+    db: Session = Depends(get_db),
+):
+    history = PatientService.get_medical_history(db, current_user.patient_id or current_user.id)
+    return APIResponse(success=True, message="Medical history retrieved", data=history)
+
+
 @router.get("/timeline", response_model=APIResponse[PatientTimelineResponse])
 def get_patient_timeline(
     current_user: CurrentUser = Depends(require_role(UserRoleEnum.PATIENT)),

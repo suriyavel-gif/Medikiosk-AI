@@ -8,6 +8,7 @@ from app.models.models import (
     Prescription,
     MedicalReport,
     Consent,
+    Notification,
     AuditLog,
     MedicalHistory,
     AuditActionEnum,
@@ -28,6 +29,14 @@ from app.services.audit_service import AuditService
 
 
 class PatientService:
+    @staticmethod
+    def get_medical_history(db: Session, patient_id: str) -> List[MedicalHistoryItemSchema]:
+        patient = db.query(Patient).filter(Patient.id == patient_id).first()
+        if not patient:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient profile not found")
+        rows = db.query(MedicalHistory).filter(MedicalHistory.patient_id == patient_id).order_by(MedicalHistory.created_at.desc()).all()
+        return [MedicalHistoryItemSchema.model_validate(row) for row in rows]
+
     @staticmethod
     def get_profile(db: Session, patient_id: str) -> PatientProfileResponse:
         """Fetch patient profile details."""
@@ -163,15 +172,15 @@ class PatientService:
                     timestamp=n.created_at,
                     title="🚨 Emergency SOS Alert Triggered",
                     description=n.message or "Patient triggered critical emergency response.",
-                    doctor_name=payload.get("attending_doctor", "Hospital Emergency Triage"),
-                    hospital_name=payload.get("hospital_name", "Apollo Hospitals Chennai"),
+                    doctor_name=payload.get("attending_doctor"),
+                    hospital_name=payload.get("hospital_name"),
                     metadata={
-                        "sms_status": payload.get("sms_status", "SENT"),
-                        "call_status": payload.get("call_status", "INITIATED"),
+                        "sms_status": payload.get("sms_status", "NOT_CONFIGURED"),
+                        "call_status": payload.get("call_status", "NOT_CONFIGURED"),
                         "vitals": payload.get("vitals", {}),
-                        "location": payload.get("location", "Emergency OPD"),
-                        "doctor_notified": payload.get("doctor_notified", True),
-                        "reception_notified": payload.get("reception_notified", True),
+                        "location": payload.get("location"),
+                        "doctor_notified": payload.get("doctor_notified", False),
+                        "reception_notified": payload.get("reception_notified", False),
                         "event_id": payload.get("event_id", n.id),
                     },
                 )

@@ -27,6 +27,44 @@ from app.services.audit_service import AuditService
 
 class ReceptionService:
     @staticmethod
+    def call_queue_item(db: Session, queue_id: str, hospital_id: str, doctor_id: Optional[str] = None, actor_id: Optional[str] = None) -> dict:
+        item = db.query(QueueItem).filter(QueueItem.id == queue_id, QueueItem.hospital_id == hospital_id).first()
+        if not item:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Queue item not found")
+        if item.queue_status != QueueStatusEnum.WAITING:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Queue item is no longer waiting")
+        if doctor_id:
+            doctor = db.query(Doctor).filter(Doctor.id == doctor_id, Doctor.is_active.is_(True)).first()
+            if not doctor or doctor.hospital_id != item.hospital_id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Queue item is outside your doctor profile")
+            if item.doctor_id and item.doctor_id != doctor_id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Queue item is assigned to another doctor")
+            item.doctor_id = doctor_id
+            item.visit.doctor_id = doctor_id
+        now = datetime.now(timezone.utc)
+        item.queue_status = QueueStatusEnum.IN_ROOM
+        item.called_at = now
+        item.room_entered_at = now
+        item.visit.status = VisitStatusEnum.DOCTOR_REVIEW
+        try:
+            db.commit()
+            db.refresh(item)
+        except Exception:
+            db.rollback()
+            raise
+        AuditService.log_event(
+            db=db,
+            action=AuditActionEnum.UPDATE,
+            target_table="queue",
+            target_record_id=item.id,
+            actor_user_id=actor_id,
+            actor_role="DOCTOR" if doctor_id else "RECEPTIONIST",
+            hospital_id=hospital_id,
+            description=f"Queue token {item.token_display_number} called into consultation",
+        )
+        return {"queue_id": item.id, "visit_id": item.visit_id, "token_number": item.token_display_number, "queue_status": item.queue_status.value, "called_at": item.called_at}
+
+    @staticmethod
     def search_patient(db: Session, query_str: str) -> List[PatientProfileResponse]:
         """Search patient by phone number, MRN, National ID, or full name."""
         q = query_str.strip()
@@ -57,6 +95,13 @@ class ReceptionService:
         dept = db.query(Department).filter(Department.id == req.department_id).first()
         if not dept:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Department not found")
+        if dept.hospital_id != hospital.id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Department is outside the selected hospital")
+        doctor = None
+        if req.doctor_id:
+            doctor = db.query(Doctor).filter(Doctor.id == req.doctor_id, Doctor.is_active.is_(True)).first()
+            if not doctor or doctor.hospital_id != hospital.id or not any(link.department_id == dept.id for link in doctor.departments):
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Doctor is not assigned to the selected hospital and department")
 
         # Generate unique visit number
         daily_count = db.query(Visit).filter(
@@ -80,8 +125,6 @@ class ReceptionService:
             admitted_at=datetime.now(timezone.utc),
         )
         db.add(visit)
-        db.commit()
-        db.refresh(visit)
 
         # Generate Queue Token
         token_prefix = dept.code[:2].upper() if dept.code else "OP"
@@ -106,8 +149,13 @@ class ReceptionService:
             queue_status=QueueStatusEnum.WAITING,
         )
         db.add(queue_item)
-        db.commit()
-        db.refresh(queue_item)
+        try:
+            db.commit()
+            db.refresh(visit)
+            db.refresh(queue_item)
+        except Exception:
+            db.rollback()
+            raise
 
         # Audit log
         AuditService.log_event(
@@ -122,11 +170,7 @@ class ReceptionService:
             description=f"Visit #{visit_number} registered, Token {token_display_number} issued",
         )
 
-        doc_name = None
-        if req.doctor_id:
-            doc = db.query(Doctor).filter(Doctor.id == req.doctor_id).first()
-            if doc:
-                doc_name = f"Dr. {doc.first_name} {doc.last_name}"
+        doc_name = f"Dr. {doctor.first_name} {doctor.last_name}" if doctor else None
 
         return QueueTokenResponse(
             queue_id=queue_item.id,

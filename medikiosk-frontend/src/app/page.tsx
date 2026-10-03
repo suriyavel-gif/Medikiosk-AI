@@ -33,8 +33,8 @@ export default function RoleBasedLoginPage() {
   const [role, setRole] = useState<RoleType>("PATIENT");
   const [phone, setPhone] = useState("9876543210");
   const [otp, setOtp] = useState("123456");
-  const [email, setEmail] = useState("doctor@cityhospital.com");
-  const [password, setPassword] = useState("doctor123");
+  const [email, setEmail] = useState("dr.sharma@medikiosk.ai");
+  const [password, setPassword] = useState("Doctor@123");
   const [loading, setLoading] = useState(false);
 
   const handleRoleChange = (newRole: RoleType) => {
@@ -43,8 +43,8 @@ export default function RoleBasedLoginPage() {
       setPhone("9876543210");
       setOtp("123456");
     } else if (newRole === "DOCTOR") {
-      setEmail("doctor@cityhospital.com");
-      setPassword("doctor123");
+      setEmail("dr.sharma@medikiosk.ai");
+      setPassword("Doctor@123");
     } else if (newRole === "RECEPTION") {
       setEmail("reception@cityhospital.com");
       setPassword("desk123");
@@ -117,7 +117,7 @@ export default function RoleBasedLoginPage() {
           router.push("/patient/dashboard");
         }
       } else if (targetRole === "DOCTOR") {
-        const res = await api.auth.doctorLogin("doctor@cityhospital.com", "doctor123");
+        const res = await api.auth.doctorLogin("dr.sharma@medikiosk.ai", "Doctor@123");
         if (res.success) {
           login(res.data);
           toast.success("Welcome, Dr. Rajesh Sharma!");
@@ -408,7 +408,7 @@ export default function RoleBasedLoginPage() {
               type="button"
               onClick={() => handleDemoLaunch("DOCTOR")}
               className="p-1.5 bg-[#F8FAFC] hover:bg-[#F1F5F9] border border-[#E2E8F0] rounded-lg font-semibold text-slate-900 transition flex flex-col items-center justify-center gap-1 cursor-pointer"
-              title="doctor@cityhospital.com / doctor123"
+              title="dr.sharma@medikiosk.ai / Doctor@123"
             >
               <Stethoscope className="w-3.5 h-3.5 text-[#2563EB]" />
               <span>Doctor</span>

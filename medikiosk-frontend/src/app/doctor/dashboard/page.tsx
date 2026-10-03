@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppLayout } from "@/components/AppLayout";
@@ -39,148 +39,66 @@ export default function DoctorDashboardPage() {
   const { selectedHospital } = useHospital();
 
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeQueueIndex, setActiveQueueIndex] = useState(0);
+
   // Real-Time Intelligent Emergency Response Alert State
-  const [emergencyAlert, setEmergencyAlert] = useState<{
-    event_id: string;
-    patient_name: string;
-    patient_id: string;
-    national_health_id: string;
-    hospital_name: string;
-    location: string;
-    symptoms: string;
-    vitals: {
-      heart_rate: string;
-      spo2: string;
-      blood_pressure: string;
-      temperature: string;
-    };
-    priority: string;
-    timestamp: string;
-    sms_sid: string;
-    call_sid: string;
-    doctor_accepted: boolean;
-    accepted_by?: string;
-    status: string;
-  } | null>({
-    event_id: "EMERG-20260903-001",
-    patient_name: "Vikram Malhotra",
-    patient_id: "569589b7-bcd1-49e7-a886-dd5199c46838",
-    national_health_id: "91-4920-8831-0941",
-    hospital_name: "Apollo Hospitals Chennai",
-    location: "Kiosk Station 1 - Ground Floor OPD Block",
-    symptoms: "Crushing substernal chest pressure radiating to left arm with diaphoresis",
-    vitals: {
-      heart_rate: "108 bpm",
-      spo2: "94%",
-      blood_pressure: "140/95 mmHg",
-      temperature: "98.6 F",
-    },
-    priority: "ESI-1 RESUSCITATION",
-    timestamp: "Just now • 07:32 AM",
-    sms_sid: "SMf4718008ec113cb713f1b0a873c0376e",
-    call_sid: "CAb928d6633476ae5f2b66cbac6d90c07c",
-    doctor_accepted: false,
-    status: "ACTIVE",
-  });
+  const [emergencyAlert, setEmergencyAlert] = useState<any | null>(null);
 
   const handleAcceptEmergencyCase = async () => {
     if (!emergencyAlert) return;
     try {
-      await api.emergency.acceptCase({
-        event_id: emergencyAlert.event_id,
-        doctor_name: "Dr. Rajesh Sharma, MD",
-      });
-      setEmergencyAlert((prev) => prev ? { ...prev, doctor_accepted: true, accepted_by: "Dr. Rajesh Sharma, MD", status: "ACCEPTED" } : null);
-      toast.success("🚨 Emergency Case Accepted! Crash Team alerted at Trauma Bay 1.");
-    } catch {
-      setEmergencyAlert((prev) => prev ? { ...prev, doctor_accepted: true, accepted_by: "Dr. Rajesh Sharma, MD" } : null);
-      toast.success("🚨 Emergency Case Accepted!");
+      const response = await api.emergency.acceptCase({ event_id: emergencyAlert.event_id, doctor_name: user?.full_name });
+      if (!response.success) throw new Error(response.message || "Emergency case could not be accepted");
+      setEmergencyAlert((prev: any) => prev ? { ...prev, doctor_accepted: true, accepted_by: user?.full_name, status: "ACCEPTED" } : null);
+      toast.success("Emergency case accepted.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Emergency case could not be accepted");
     }
   };
-
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiResponse, setAiResponse] = useState<string | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
 
-  // Today's Queue List
-  const queuePatients = [
-    {
-      id: "569589b7-bcd1-49e7-a886-dd5199c46838",
-      token: "TK-101",
-      name: "Vikram Malhotra",
-      age: 38,
-      gender: "Male",
-      bloodGroup: "O+",
-      mrn: "MRN-2026-10001",
-      national_health_id: "91-4920-8831-0941",
-      chiefComplaint: "Acute viral URI with fever and body ache",
-      triage: "ESI-3 (Urgent)",
-      time: "10:30 AM",
-      allergy: "Penicillin Anaphylaxis",
-      status: "IN_ROOM",
-    },
-    {
-      id: "569589b7-bcd1-49e7-a886-dd5199c46838",
-      token: "TK-102",
-      name: "Meera Nair",
-      age: 54,
-      gender: "Female",
-      bloodGroup: "B+",
-      mrn: "MRN-2026-09412",
-      national_health_id: "91-3312-9901-4412",
-      chiefComplaint: "Essential Hypertension Quarterly Review",
-      triage: "ESI-4 (Standard)",
-      time: "11:00 AM",
-      allergy: "None known",
-      status: "WAITING",
-    },
-    {
-      id: "569589b7-bcd1-49e7-a886-dd5199c46838",
-      token: "TK-103",
-      name: "Rajesh Kulkarni",
-      age: 62,
-      gender: "Male",
-      bloodGroup: "A+",
-      mrn: "MRN-2026-08819",
-      national_health_id: "91-7741-2290-8812",
-      chiefComplaint: "Type 2 Diabetes Glycemic Audit",
-      triage: "ESI-4 (Standard)",
-      time: "11:30 AM",
-      allergy: "Sulfa Drugs",
-      status: "WAITING",
-    },
-    {
-      id: "569589b7-bcd1-49e7-a886-dd5199c46838",
-      token: "TK-104",
-      name: "Sunita Patel",
-      age: 29,
-      gender: "Female",
-      bloodGroup: "AB+",
-      mrn: "MRN-2026-07741",
-      national_health_id: "91-1188-4490-2213",
-      chiefComplaint: "Persistent dry cough post-bronchitis",
-      triage: "ESI-4 (Standard)",
-      time: "12:00 PM",
-      allergy: "Aspirin",
-      status: "WAITING",
-    },
-  ];
+  const [queuePatients, setQueuePatients] = useState<any[]>([]);
+  const [recentPatients] = useState<any[]>([]);
+  const currentPatient = queuePatients.find((patient) => patient.status === "IN_ROOM") || queuePatients.find((patient) => patient.status === "CALLED") || null;
 
-  // Recent Consulted Patients
-  const recentPatients = [
-    { name: "Ananya Sharma", age: 34, diagnosis: "Acute Pharyngitis", time: "09:45 AM", prescription: "Azithromycin 500mg, Paracetamol" },
-    { name: "Karthik Raja", age: 47, diagnosis: "Mild Bronchial Asthma", time: "09:15 AM", prescription: "Budesonide Inhaler, Levocetirizine" },
-    { name: "Devika Menon", age: 61, diagnosis: "Dyslipidemia & Hypertension", time: "08:45 AM", prescription: "Atorvastatin 20mg, Telmisartan" },
-  ];
+  const refreshQueue = async () => {
+    try {
+      const response = await api.doctor.getQueue();
+      if (!response.success || !Array.isArray(response.data)) throw new Error(response.message || "Queue could not be loaded");
+      setQueuePatients(response.data.map((patient) => ({
+        id: patient.patient_id,
+        queueId: patient.queue_id,
+        visitId: patient.visit_id,
+        token: patient.token_number,
+        name: patient.patient_name,
+        age: patient.patient_age,
+        gender: patient.patient_gender,
+        mrn: patient.hospital_mrn,
+        chiefComplaint: patient.chief_complaint || "No complaint recorded",
+        triage: patient.triage_level || "Not triaged",
+        time: patient.waiting_since,
+        status: patient.queue_status,
+      })));
+    } catch (error) {
+      setQueuePatients([]);
+      toast.error(error instanceof Error ? error.message : "Queue could not be loaded");
+    }
+  };
 
-  const currentPatient = queuePatients[activeQueueIndex] || queuePatients[0];
+  useEffect(() => { void refreshQueue(); }, []);
 
-  const handleCallNext = () => {
-    const nextIdx = (activeQueueIndex + 1) % queuePatients.length;
-    setActiveQueueIndex(nextIdx);
-    const pat = queuePatients[nextIdx];
-    toast.success(`📢 Token #${pat.token} (${pat.name}) called into Cardiology OPD Suite!`);
+  const handleCallNext = async () => {
+    const next = queuePatients.find((patient) => patient.status === "WAITING");
+    if (!next) { toast.error("No waiting patient is available."); return; }
+    try {
+      const response = await api.doctor.callNext(next.queueId);
+      if (!response.success || !response.data) throw new Error(response.message || "Could not call patient");
+      await refreshQueue();
+      toast.success(`Token ${response.data.token_number} called.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not call patient");
+    }
   };
 
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -189,19 +107,20 @@ export default function DoctorDashboardPage() {
     router.push(`/doctor/search?q=${encodeURIComponent(searchQuery)}`);
   };
 
-  const handleRunAiCopilot = (e: React.FormEvent) => {
+  const handleRunAiCopilot = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!aiPrompt.trim()) return;
+    if (!aiPrompt.trim() || !currentPatient) { toast.error("Select a patient currently in the queue first."); return; }
     setAiLoading(true);
-    setTimeout(() => {
-      setAiLoading(false);
-      setAiResponse(
-        `Clinical Analysis for "${aiPrompt}":\n\n• Patient ${currentPatient.name} has severe Penicillin Anaphylaxis. Avoid all beta-lactam antibiotics.\n• Recommended alternative: Macrolide class (Azithromycin 500mg once daily) or Respiratory Fluoroquinolone.\n• Recommended labs: Fasting Blood Sugar, Serum Creatinine, and 12-Lead ECG.`
-      );
-      toast.success("AI Clinical Guidance synthesized by Gemini 2.5");
-    }, 600);
+    try {
+      const response = await api.ai.doctorSummarizeHistory(currentPatient.id);
+      if (!response.success || !response.data) throw new Error(response.message || "Clinical summary failed");
+      setAiResponse(JSON.stringify(response.data, null, 2));
+      toast.success("Patient history summary loaded.");
+    } catch (error) {
+      setAiResponse(null);
+      toast.error(error instanceof Error ? error.message : "Clinical summary failed");
+    } finally { setAiLoading(false); }
   };
-
   return (
     <AppLayout>
       <div className="space-y-8 animate-fade-in max-w-[1440px] mx-auto pb-12">
@@ -217,11 +136,11 @@ export default function DoctorDashboardPage() {
               <div className="flex flex-wrap items-center gap-2.5">
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 border border-blue-200 text-xs font-bold text-[#2563EB]">
                   <Building2 className="w-3.5 h-3.5" />
-                  <span>Apollo Hospitals Chennai • Cardiology Department</span>
+                  <span>Assigned hospital</span>
                 </span>
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold">
                   <Stethoscope className="w-3 h-3 text-slate-500" />
-                  <span>Dr. Rajesh Sharma, MD (DM Cardiology)</span>
+                  <span>{user?.full_name || "Doctor"}</span>
                 </span>
               </div>
 
@@ -430,7 +349,7 @@ export default function DoctorDashboardPage() {
               <p className="text-xs text-slate-500 mt-0.5">Live roster for Room 304 Consultation Suite</p>
             </div>
             <span className="text-xs font-bold text-slate-600 bg-slate-100 px-3 py-1 rounded-full">
-              {queuePatients.length} Patients Waiting
+              {queuePatients.filter((patient) => patient.status === "WAITING").length} Patients Waiting
             </span>
           </div>
 
@@ -444,23 +363,16 @@ export default function DoctorDashboardPage() {
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <strong className="text-[15px] font-bold text-slate-900">{pat.name}</strong>
-                      <span className="text-[11px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
-                        {pat.bloodGroup}
-                      </span>
                       <span className="text-slate-400">• {pat.age} Yrs ({pat.gender})</span>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 flex items-center gap-1">
-                        <Sparkles className="w-3 h-3 text-[#2563EB]" />
-                        <span>AI Intake: HIGH RISK</span>
-                      </span>
                     </div>
                     <p className="text-slate-700 text-xs font-medium">
                       <strong className="text-slate-900 font-bold">AI Clinical Intake: </strong>
-                      {pat.chiefComplaint} (Slot: {pat.time})
+                      {pat.chiefComplaint} (Waiting since: {new Date(pat.time).toLocaleTimeString()})
                     </p>
                     <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                       <span>MRN: <strong className="text-slate-700">{pat.mrn}</strong></span>
                       <span>•</span>
-                      <span>Department: <strong className="text-[#2563EB]">Cardiology OPD</strong></span>
+                      <span>Triage: <strong className="text-[#2563EB]">{pat.triage}</strong></span>
                       <span>•</span>
                       <span>Allergy: <strong className="text-rose-700">{pat.allergy}</strong></span>
                     </div>
@@ -496,10 +408,11 @@ export default function DoctorDashboardPage() {
               <History className="w-5 h-5 text-[#2563EB]" />
               <span>Recently Consulted Patients</span>
             </h2>
-            <span className="text-xs text-slate-500">Completed Encounters Today</span>
+            <span className="text-xs text-slate-500"></span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5 text-xs">
+            {!recentPatients.length && <p className="text-sm text-slate-500">No recent consultation records are available.</p>}
             {recentPatients.map((rp, idx) => (
               <div key={idx} className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 space-y-2">
                 <div className="flex items-center justify-between">
@@ -520,42 +433,14 @@ export default function DoctorDashboardPage() {
         </div>
 
         {/* ========================================================= */}
-        {/* 5. ANALYTICS SECTION                                      */}
-        {/* ========================================================= */}
-        <div className="bg-white border border-slate-200/80 rounded-2xl p-6 shadow-xs space-y-5">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <h2 className="text-[22px] font-semibold text-slate-900 flex items-center gap-2">
-              <BarChart3 className="w-5 h-5 text-[#2563EB]" />
-              <span>Departmental Clinical Analytics</span>
-            </h2>
-            <span className="text-xs text-slate-500">Cardiology OPD Metrics</span>
+        {/* 5. ANALYTICS SECTION */}
+        <div className="bg-white border border-slate-200/80 rounded-2xl p-6 shadow-xs space-y-4">
+          <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+            <BarChart3 className="w-5 h-5 text-[#2563EB]" />
+            <h2 className="text-[22px] font-semibold text-slate-900">Departmental Clinical Analytics</h2>
           </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-5 text-xs">
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
-              <span className="text-slate-500 font-semibold block">Average Consult Duration</span>
-              <strong className="text-xl font-bold text-slate-900">11.4 mins</strong>
-              <span className="text-[11px] text-emerald-700 font-medium">Optimal workflow pacing</span>
-            </div>
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
-              <span className="text-slate-500 font-semibold block">CDSS Safety Interceptions</span>
-              <strong className="text-xl font-bold text-emerald-700">100%</strong>
-              <span className="text-[11px] text-emerald-800 font-medium">0 allergy violations</span>
-            </div>
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
-              <span className="text-slate-500 font-semibold block">E-Prescription Rate</span>
-              <strong className="text-xl font-bold text-[#2563EB]">98.2%</strong>
-              <span className="text-[11px] text-slate-500">Digitally signed</span>
-            </div>
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
-              <span className="text-slate-500 font-semibold block">Patient Adherence Rate</span>
-              <strong className="text-xl font-bold text-purple-700">92.4%</strong>
-              <span className="text-[11px] text-purple-800 font-medium">IoT dose compliance</span>
-            </div>
-          </div>
+          <p className="text-sm text-slate-500">No verified analytics are available.</p>
         </div>
-
-        {/* ========================================================= */}
         {/* 6. AI ASSISTANT SECTION                                   */}
         {/* ========================================================= */}
         <div className="bg-white border border-slate-200/80 rounded-2xl p-6 shadow-xs space-y-4">
@@ -575,7 +460,7 @@ export default function DoctorDashboardPage() {
                 type="text"
                 value={aiPrompt}
                 onChange={(e) => setAiPrompt(e.target.value)}
-                placeholder="Ask clinical copilot (e.g., Check drug interactions for Penicillin allergic patient, summarize longitudinal case history)..."
+                placeholder="Ask for a summary of the selected patient saved history..."
                 className="w-full pl-4 pr-28 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-[#2563EB] transition"
               />
               <button

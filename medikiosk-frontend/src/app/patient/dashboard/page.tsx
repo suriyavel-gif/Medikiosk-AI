@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AppLayout } from "@/components/AppLayout";
 import { useAuth } from "@/lib/auth-context";
 import { useLanguage } from "@/lib/language-context";
@@ -41,6 +42,7 @@ import {
 
 export default function PatientDashboardPage() {
   const { user } = useAuth();
+  const router = useRouter();
   const { language, t } = useLanguage();
 
   // AI Assistant Chat & Voice Input State
@@ -59,81 +61,20 @@ export default function PatientDashboardPage() {
   const [aiRouteResult, setAiRouteResult] = useState<any | null>(null);
   const [isListeningSymptoms, setIsListeningSymptoms] = useState(false);
 
-  // Live Queue Token
-  const [activeToken, setActiveToken] = useState<{
-    token: string;
-    hospital: string;
-    department: string;
-    doctor: string;
-    eta: string;
-    status: string;
-    patientsAhead: number;
-    doctorStatus: string;
-  }>({
-    token: "TK-101",
-    hospital: "Apollo Hospitals Chennai",
-    department: "Cardiology OPD (Room 304)",
-    doctor: "Dr. Rajesh Sharma, MD",
-    eta: "8 Mins",
-    status: "In Queue",
-    patientsAhead: 2,
-    doctorStatus: "In Room with Token #100",
-  });
+  // The dashboard reads active appointment state only when loaded from the server.
+  const [activeToken] = useState<any | null>(null);
 
-  // 4 Physical IoT Vitals
-  const vitals = [
-    { name: "Blood Pressure", value: "120/80", unit: "mmHg", status: "Optimal", icon: HeartPulse, color: "text-[#2563EB]" },
-    { name: "Heart Rate", value: "76", unit: "BPM", status: "Normal Sinus", icon: Activity, color: "text-emerald-600" },
-    { name: "Blood Oxygen (SpO2)", value: "98", unit: "%", status: "Healthy", icon: ShieldCheck, color: "text-blue-600" },
-    { name: "Body Temp", value: "98.4", unit: "°F", status: "Normal", icon: Activity, color: "text-slate-700" },
-  ];
-
-  // Active Prescriptions
-  const activePrescriptions = [
-    { name: "Telmisartan 40mg", dosage: "1 Tab OD (Morning)", duration: "Continuous", doctor: "Dr. Rajesh Sharma (Apollo)" },
-    { name: "Metformin 500mg SR", dosage: "1 Tab BD (With meals)", duration: "90 Days", doctor: "Dr. Ananya Iyer (Fortis)" },
-  ];
+  const vitals: any[] = [];
+  const [activePrescriptions, setActivePrescriptions] = useState<any[]>([]);
+  useEffect(() => {
+    api.patient.getPrescriptions().then((response) => {
+      if (!response.success || !response.data) throw new Error(response.message || "Could not load prescriptions");
+      setActivePrescriptions(response.data.flatMap((prescription) => prescription.items.map((item) => ({ name: `${item.medicine_name} ${item.strength || ""}`.trim(), dosage: item.dosage_instruction, duration: `${item.duration_days} days`, doctor: prescription.doctor_name }))));
+    }).catch((error) => toast.error(error instanceof Error ? error.message : "Could not load prescriptions"));
+  }, []);
 
   // Google Maps & Emergency Route Navigation State
-  const [nearbyHospitals, setNearbyHospitals] = useState<any[]>([
-    {
-      id: "apollo-main",
-      name: "Apollo Hospitals Main Campus",
-      category: "Super Specialty Trauma Center",
-      address: "21 Greams Lane, Thousand Lights, Chennai",
-      distance_km: 2.4,
-      traffic_level: "MODERATE",
-      eta_minutes: 7,
-      helpline: "1066",
-      available_trauma_bays: 4,
-      live_ambulance_eta: "4 Mins",
-    },
-    {
-      id: "ggh-chennai",
-      name: "Government General Hospital (RGGGH)",
-      category: "Apex Public Trauma Hospital",
-      address: "EVR Periyar Salai, Park Town, Chennai",
-      distance_km: 4.8,
-      traffic_level: "HEAVY",
-      eta_minutes: 14,
-      helpline: "108",
-      available_trauma_bays: 8,
-      live_ambulance_eta: "9 Mins",
-    },
-    {
-      id: "fortis-malar",
-      name: "Fortis Malar Hospital",
-      category: "Multi-Specialty Emergency Center",
-      address: "52 1st Main Rd, Gandhi Nagar, Adyar, Chennai",
-      distance_km: 6.1,
-      traffic_level: "LOW",
-      eta_minutes: 11,
-      helpline: "105010",
-      available_trauma_bays: 5,
-      live_ambulance_eta: "8 Mins",
-    },
-  ]);
-
+  const [nearbyHospitals] = useState<any[]>([]);
   const [activeRouteModal, setActiveRouteModal] = useState<any | null>(null);
 
   const handleOpenEmergencyRoute = (h: any) => {
@@ -151,43 +92,40 @@ export default function PatientDashboardPage() {
   };
 
   // Real-Time Doctor Consent Request State
-  const [pendingConsentRequest, setPendingConsentRequest] = useState<any | null>({
-    id: "REQ-CONSENT-2026-001",
-    doctor_name: "Dr. Rajesh Sharma, MD",
-    hospital_name: "Apollo Hospitals Chennai",
-    department: "Cardiology",
-    reason: "Diagnosis Consultation & Cardiac History Synthesis",
-    duration: "24 Hours (Today)",
-  });
+  const [pendingConsentRequest, setPendingConsentRequest] = useState<any | null>(null);
   const [showConsentApprovalModal, setShowConsentApprovalModal] = useState(false);
   const [selectedDuration, setSelectedDuration] = useState("24 hours");
+
+  useEffect(() => {
+    if (!user?.id || user.role !== "PATIENT") return;
+    api.consent.getRequests({ patient_id: user.id, status_filter: "PENDING" })
+      .then((response) => {
+        if (!response.success) throw new Error("Could not load consent requests");
+        setPendingConsentRequest(response.requests?.[0] || null);
+      })
+      .catch((error) => toast.error(error instanceof Error ? error.message : "Could not load consent requests"));
+  }, [user?.id, user?.role]);
 
   const handleApproveConsentFromDashboard = async () => {
     if (!pendingConsentRequest) return;
     try {
-      await api.consent.takeAction(pendingConsentRequest.id, "APPROVE", selectedDuration);
-      toast.success(`✓ Sovereign Access Granted to ${pendingConsentRequest.doctor_name} for ${selectedDuration}!`);
+      const response = await api.consent.takeAction(pendingConsentRequest.id, "APPROVE", selectedDuration);
+      if (!response.success) throw new Error(response.message || "Consent approval failed");
+      toast.success(`Access granted to ${pendingConsentRequest.doctor_name}.`);
       setPendingConsentRequest(null);
       setShowConsentApprovalModal(false);
-    } catch {
-      toast.success(`✓ Sovereign Access Granted to ${pendingConsentRequest.doctor_name} for ${selectedDuration}!`);
-      setPendingConsentRequest(null);
-      setShowConsentApprovalModal(false);
-    }
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Consent approval failed"); }
   };
 
   const handleRejectConsentFromDashboard = async () => {
     if (!pendingConsentRequest) return;
     try {
-      await api.consent.takeAction(pendingConsentRequest.id, "REJECT");
-      toast.error(`✕ Consent Request Rejected for ${pendingConsentRequest.doctor_name}`);
+      const response = await api.consent.takeAction(pendingConsentRequest.id, "REJECT");
+      if (!response.success) throw new Error(response.message || "Consent rejection failed");
+      toast.info(`Consent request rejected for ${pendingConsentRequest.doctor_name}.`);
       setPendingConsentRequest(null);
-    } catch {
-      toast.error(`✕ Consent Request Rejected for ${pendingConsentRequest.doctor_name}`);
-      setPendingConsentRequest(null);
-    }
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Consent rejection failed"); }
   };
-
   // Scheduled Medication Reminder Notification State
   const [activeNotification, setActiveNotification] = useState<{
     id: string;
@@ -197,37 +135,7 @@ export default function PatientDashboardPage() {
     time: string;
   } | null>(null);
 
-  // Today's Clean Medication Reminder Timeline Data
-  const todayMedicines = [
-    {
-      id: "med-01",
-      name: "Telmisartan 40mg",
-      dose: "1 Tablet",
-      instruction: "After Breakfast",
-      time: "08:00 AM",
-    },
-    {
-      id: "med-02",
-      name: "Paracetamol 650mg",
-      dose: "1 Tablet",
-      instruction: "After Lunch (if needed)",
-      time: "02:00 PM",
-    },
-    {
-      id: "med-03",
-      name: "Metformin 500mg",
-      dose: "1 Tablet",
-      instruction: "After Dinner",
-      time: "08:00 PM",
-    },
-    {
-      id: "med-04",
-      name: "Levocetirizine 5mg",
-      dose: "1 Tablet",
-      instruction: "Before Bedtime",
-      time: "09:30 PM",
-    },
-  ];
+  const todayMedicines: any[] = [];
 
   const handleShowReminderAlert = (med: any) => {
     setActiveNotification(med);
@@ -303,77 +211,34 @@ export default function PatientDashboardPage() {
 
   // AI Smart Appointment Routing Call
   const handleRunSmartRouting = async () => {
-    if (!symptomInput.trim()) {
-      toast.error("Please enter or speak your health symptoms first.");
-      return;
-    }
-
+    if (!symptomInput.trim()) { toast.error("Please enter your symptoms first."); return; }
     setAiRoutingLoading(true);
     try {
-      const res = await api.ai.routeAppointment({
-        symptoms: symptomInput,
-        selected_hospital: selectedHospital || null,
-        preferred_doctor: preferredDoctor || null,
-        language: language,
-      });
-
-      if (res.success && res.data) {
-        setAiRouteResult(res.data);
-        toast.success("✨ Gemini AI evaluated symptoms and optimized appointment routing!");
-      }
-    } catch {
-      // Fallback
-      setAiRouteResult({
-        hospital: selectedHospital || "Apollo Hospitals Chennai",
-        department: "Cardiology OPD",
-        doctor: "Dr. Rajesh Sharma, MD (DM Cardiology)",
-        priority: "HIGH",
-        estimated_wait: "15 Mins",
-        distance: "2.4 km",
-        reason: "Clinical symptoms indicate specialized cardiac evaluation required.",
-        confidence: 96,
-        recommended_slots: ["10:30 AM", "11:00 AM", "02:30 PM"],
-      });
-      toast.success("AI clinical routing evaluated.");
-    } finally {
-      setAiRoutingLoading(false);
-    }
+      const res = await api.ai.routeAppointment({ symptoms: symptomInput, selected_hospital: selectedHospital || null, preferred_doctor: preferredDoctor || null, language });
+      if (!res.success || !res.data) throw new Error(res.message || "AI routing did not return a result");
+      setAiRouteResult(res.data);
+      toast.success("AI routing completed.");
+    } catch (error) {
+      setAiRouteResult(null);
+      toast.error(error instanceof Error ? error.message : "AI routing failed");
+    } finally { setAiRoutingLoading(false); }
   };
 
-  const handleConfirmAppointment = () => {
-    const newToken = "TK-" + Math.floor(100 + Math.random() * 900);
-    setActiveToken({
-      token: newToken,
-      hospital: aiRouteResult?.hospital || selectedHospital || "Apollo Hospitals Chennai",
-      department: aiRouteResult?.department || "Cardiology OPD",
-      doctor: aiRouteResult?.doctor || "Dr. Rajesh Sharma, MD",
-      eta: aiRouteResult?.estimated_wait || "15 Mins",
-      status: "Confirmed & Queued",
-      patientsAhead: 2,
-      doctorStatus: "On-Duty in Suite 304",
-    });
-    toast.success(`🎉 Appointment & Priority Token #${newToken} Booked Successfully!`);
-  };
+  const handleConfirmAppointment = () => router.push("/patient/appointments");
 
   const handleAskAi = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!aiQuery.trim()) return;
     setAiLoading(true);
-
     try {
       const res = await api.ai.patientAssistantChat(aiQuery);
-      if (res.success && res.data?.reply) {
-        setAiResponse(res.data.reply);
-      } else {
-        setAiResponse("Based on your centralized history: Your BP (120/80) and HbA1c (6.4%) are well controlled. Remember you have a severe Penicillin allergy.");
-      }
-    } catch {
-      setAiResponse("Based on your centralized records: Active medications Telmisartan 40mg and Metformin 500mg SR are currently on schedule. Penicillin is strictly contraindicated.");
-    } finally {
-      setAiLoading(false);
-    }
+      if (!res.success || !res.data?.reply) throw new Error(res.message || "Assistant did not return an answer");
+      setAiResponse(res.data.reply);
+    } catch (error) {
+      setAiResponse(null);
+      toast.error(error instanceof Error ? error.message : "Assistant request failed");
+    } finally { setAiLoading(false); }
   };
-
   return (
     <AppLayout>
       <div className="space-y-8 animate-fade-in max-w-[1440px] mx-auto pb-12">
@@ -395,7 +260,7 @@ export default function PatientDashboardPage() {
               </div>
 
               <h1 className="text-3xl font-bold text-slate-900 tracking-tight">
-                {user?.full_name || "Vikram Malhotra"}'s Health Command Center
+                {user?.full_name || "Patient"}'s Health Command Center
               </h1>
               <p className="text-[15px] text-slate-500">
                 Longitudinal EHR telemetry, IoT vitals, AI clinical scheduling, and medication compliance
@@ -569,31 +434,7 @@ export default function PatientDashboardPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-5 text-xs">
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
-              <span className="text-slate-500 font-semibold block">{t("heart_health")}</span>
-              <strong className="text-xl font-bold text-slate-900">92 / 100</strong>
-              <span className="text-[11px] text-emerald-700 font-medium">76 bpm • Normal Sinus</span>
-            </div>
-
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
-              <span className="text-slate-500 font-semibold block">{t("diabetes_status")}</span>
-              <strong className="text-xl font-bold text-slate-900">85 / 100</strong>
-              <span className="text-[11px] text-emerald-700 font-medium">HbA1c: 6.4% Controlled</span>
-            </div>
-
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
-              <span className="text-slate-500 font-semibold block">{t("blood_pressure")}</span>
-              <strong className="text-xl font-bold text-[#2563EB]">120 / 80</strong>
-              <span className="text-[11px] text-slate-500">mmHg • Optimal Zone</span>
-            </div>
-
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
-              <span className="text-slate-500 font-semibold block">{t("bmi_optimal")}</span>
-              <strong className="text-xl font-bold text-purple-700">22.4 kg/m²</strong>
-              <span className="text-[11px] text-purple-800 font-medium">Healthy Weight Range</span>
-            </div>
-          </div>
+          <p className="text-sm text-slate-500">No health readings are available from saved visits.</p>
         </div>
 
         {/* ========================================================= */}
@@ -753,11 +594,6 @@ export default function PatientDashboardPage() {
                     className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-[#2563EB]"
                   >
                     <option value="">Auto-Recommend Optimal Hospital (AI)</option>
-                    <option value="Apollo Hospitals Chennai">Apollo Hospitals Chennai</option>
-                    <option value="Government General Hospital">Government General Hospital</option>
-                    <option value="AIIMS Delhi">AIIMS Delhi</option>
-                    <option value="CMC Vellore">CMC Vellore</option>
-                    <option value="Kauvery Hospital">Kauvery Hospital</option>
                   </select>
                 </div>
 
@@ -769,10 +605,6 @@ export default function PatientDashboardPage() {
                     className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-[#2563EB]"
                   >
                     <option value="">Auto-Assign Optimal Specialist (AI)</option>
-                    <option value="Dr. Rajesh Sharma, MD">Dr. Rajesh Sharma, MD (Cardiology)</option>
-                    <option value="Dr. Anita Desai, MD">Dr. Anita Desai, MD (Neurology)</option>
-                    <option value="Dr. Sandeep Nair, MS">Dr. Sandeep Nair, MS (Orthopedics)</option>
-                    <option value="Dr. Priya Raman, MD">Dr. Priya Raman, MD (Medicine)</option>
                   </select>
                 </div>
               </div>
@@ -906,7 +738,7 @@ export default function PatientDashboardPage() {
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-5 text-xs">
+          {activeToken ? <div className="grid grid-cols-1 sm:grid-cols-4 gap-5 text-xs">
             <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 space-y-1">
               <span className="text-slate-500 font-semibold block">{t("token_number")}</span>
               <strong className="text-2xl font-bold text-[#2563EB] font-mono">#{activeToken.token}</strong>
@@ -930,7 +762,7 @@ export default function PatientDashboardPage() {
               <strong className="text-xs font-bold text-slate-900 block">{activeToken.doctor}</strong>
               <span className="text-[11px] text-blue-700 font-medium">{activeToken.doctorStatus}</span>
             </div>
-          </div>
+          </div> : <p className="text-sm text-slate-500">No active appointment is linked to your account. <Link className="text-blue-700 font-semibold" href="/patient/appointments">Book an appointment</Link></p>}
         </div>
 
         {/* ========================================================= */}
@@ -944,11 +776,11 @@ export default function PatientDashboardPage() {
                 <HeartPulse className="w-4 h-4 text-[#2563EB]" />
                 <span>Physical IoT Diagnostic Telemetry</span>
               </h3>
-              <span className="text-xs font-semibold text-emerald-700">Validated</span>
+              <span className="text-xs font-semibold text-slate-500">Recorded readings</span>
             </div>
 
             <div className="grid grid-cols-2 gap-3 text-xs">
-              {vitals.map((v, i) => (
+              {vitals.length ? vitals.map((v, i) => (
                 <div key={i} className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
                   <div className="flex items-center justify-between text-slate-500">
                     <span className="text-[11px] font-semibold">{v.name}</span>
@@ -957,7 +789,7 @@ export default function PatientDashboardPage() {
                   <strong className="text-base font-bold text-slate-900 block">{v.value} <span className="text-xs font-normal text-slate-500">{v.unit}</span></strong>
                   <span className="text-[10px] text-emerald-700 font-medium">{v.status}</span>
                 </div>
-              ))}
+              )) : <p className="col-span-2 text-slate-500">No vital sign readings are recorded.</p>}
             </div>
           </div>
 
@@ -998,7 +830,7 @@ export default function PatientDashboardPage() {
                 <h2 className="text-[22px] font-semibold text-slate-900">Nearby Medical Centers & Emergency Navigation</h2>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Real-time GPS proximity, simulated traffic conditions, and emergency green-corridor routing
+                Nearby facility and route data are unavailable until a verified directory and map service are connected.
               </p>
             </div>
             <span className="text-xs font-mono font-bold text-slate-600 bg-slate-100 px-3 py-1 rounded-full">

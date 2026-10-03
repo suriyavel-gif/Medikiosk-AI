@@ -16,6 +16,7 @@ from app.api.endpoints import (
     hospitals,
     sync,
     maps,
+    appointments,
 )
 
 api_router = APIRouter()
@@ -34,5 +35,6 @@ api_router.include_router(emergency.router)
 api_router.include_router(hospitals.router)
 api_router.include_router(sync.router)
 api_router.include_router(maps.router)
+api_router.include_router(appointments.router)
 api_router.include_router(ai.router, prefix="/ai", tags=["Google Gemini AI"])
 api_router.include_router(notifications.router, prefix="/notifications", tags=["Notification Service"])

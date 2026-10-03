@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { useHospital } from "@/lib/hospital-context";
+
 import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
@@ -32,17 +32,14 @@ interface EmergencySOSModalProps {
 type StepType = "CONFIRM" | "DISPATCHING" | "SUCCESS";
 
 export function EmergencySOSModal({ isOpen, onClose }: EmergencySOSModalProps) {
-  const { selectedHospital } = useHospital();
   const { user } = useAuth();
 
   const [step, setStep] = useState<StepType>("CONFIRM");
   const [progressStep, setProgressStep] = useState(1);
-  const [eventId, setEventId] = useState<string>("EMERG-20260902213500");
+  const [eventId, setEventId] = useState<string>("");
   const [sosDetails, setSosDetails] = useState<any>(null);
 
-  const patientName = user?.full_name || "Vikram Malhotra";
-  const hospitalName = selectedHospital?.name || "Apollo Hospitals Chennai";
-  const contactPhone = "+918248381919";
+  const patientName = user?.full_name || "Patient";
 
   const vitals = {
     heart_rate: "105 bpm",
@@ -60,40 +57,20 @@ export function EmergencySOSModal({ isOpen, onClose }: EmergencySOSModalProps) {
   }, [isOpen]);
 
   const handleTriggerSOS = async () => {
+    if (!user?.id || user.role !== "PATIENT") { toast.error("Sign in with a patient account to request SOS."); return; }
     setStep("DISPATCHING");
     setProgressStep(1);
-
-    // Progressive step animation
-    const t1 = setTimeout(() => setProgressStep(2), 400);  // Saving Event
-    const t2 = setTimeout(() => setProgressStep(3), 800);  // Sending SMS
-    const t3 = setTimeout(() => setProgressStep(4), 1200); // Calling Relative
-    const t4 = setTimeout(() => setProgressStep(5), 1600); // Notifying Hospital & Updating Timeline
-
     try {
-      const response = await api.emergency.triggerSOS({
-        patient_name: patientName,
-        hospital_name: hospitalName,
-        location: "Emergency OPD / Kiosk Station 1",
-        reason: "Patient triggered Emergency SOS button",
-        contact_phone: contactPhone,
-        vitals: vitals,
-      } as any);
-
-      setTimeout(() => {
-        if (response) {
-          setEventId(response.event_id || `EMERG-${Date.now()}`);
-          setSosDetails(response);
-          setStep("SUCCESS");
-          toast.success("🚨 Emergency Successfully Triggered! All channels notified.");
-        }
-      }, 1900);
-    } catch (err: any) {
-      setTimeout(() => {
-        // Fallback for resilient finish
-        setEventId(`EMERG-${Date.now()}`);
-        setStep("SUCCESS");
-        toast.success("🚨 Emergency SOS Dispatched and Recorded.");
-      }, 1900);
+      const response = await api.emergency.triggerSOS({ patient_id: user.id });
+      if (!response.success || !response.event_id) throw new Error("The SOS alert was not confirmed by the server");
+      setEventId(response.event_id);
+      setSosDetails(response);
+      setProgressStep(5);
+      setStep("SUCCESS");
+      toast.success("Emergency SOS was recorded in the hospital inbox.");
+    } catch (error) {
+      setStep("CONFIRM");
+      toast.error(error instanceof Error ? error.message : "Emergency SOS could not be recorded");
     }
   };
 
@@ -130,54 +107,13 @@ export function EmergencySOSModal({ isOpen, onClose }: EmergencySOSModalProps) {
               <div className="text-center space-y-1 py-2">
                 <h3 className="text-base font-bold text-slate-900">Are you sure you want to trigger Emergency SOS?</h3>
                 <p className="text-slate-500">
-                  This action will instantly initiate the following rapid response sequence:
+                  This will create an emergency alert in the hospital inbox. SMS and voice dispatch are not configured.
                 </p>
               </div>
 
-              {/* Action Checklist */}
-              <div className="space-y-2.5 bg-[#F8FAFC] p-4 rounded-2xl border border-[#E2E8F0]">
-                <div className="flex items-center gap-2.5 font-semibold text-slate-800">
-                  <Building2 className="w-4 h-4 text-[#2563EB]" />
-                  <span>Notify Hospital Emergency Crash Team ({hospitalName})</span>
-                </div>
-                <div className="flex items-center gap-2.5 font-semibold text-slate-800">
-                  <Stethoscope className="w-4 h-4 text-[#2563EB]" />
-                  <span>Alert Attending Doctors in EMR Console</span>
-                </div>
-                <div className="flex items-center gap-2.5 font-semibold text-slate-800">
-                  <PhoneCall className="w-4 h-4 text-emerald-600" />
-                  <span>Call Emergency Contact ({contactPhone}) via Twilio Voice</span>
-                </div>
-                <div className="flex items-center gap-2.5 font-semibold text-slate-800">
-                  <MessageSquare className="w-4 h-4 text-emerald-600" />
-                  <span>Send Real-Time Vitals SMS Alert to Caregiver</span>
-                </div>
-                <div className="flex items-center gap-2.5 font-semibold text-slate-800">
-                  <History className="w-4 h-4 text-purple-600" />
-                  <span>Log Event into Patient Longitudinal Case Timeline</span>
-                </div>
+              <div className="p-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-900">
+                The server will save this alert in the hospital inbox. No live vitals or external SMS/voice dispatch will be attached.
               </div>
-
-              {/* Vitals Preview */}
-              <div className="grid grid-cols-4 gap-2 text-center p-3 rounded-xl bg-blue-50/50 border border-blue-200">
-                <div>
-                  <span className="text-[10px] text-slate-500 font-semibold block">Heart Rate</span>
-                  <strong className="text-xs font-bold text-slate-900">{vitals.heart_rate}</strong>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-500 font-semibold block">SpO2</span>
-                  <strong className="text-xs font-bold text-slate-900">{vitals.spo2}</strong>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-500 font-semibold block">Blood Press.</span>
-                  <strong className="text-xs font-bold text-slate-900">{vitals.blood_pressure}</strong>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-500 font-semibold block">Temp</span>
-                  <strong className="text-xs font-bold text-slate-900">{vitals.temperature}</strong>
-                </div>
-              </div>
-
               {/* Action Buttons */}
               <div className="flex items-center justify-between pt-2 border-t border-[#E2E8F0]">
                 <button
@@ -267,48 +203,15 @@ export function EmergencySOSModal({ isOpen, onClose }: EmergencySOSModalProps) {
                 <CheckCircle2 className="w-10 h-10 text-emerald-600" />
               </div>
               <div className="space-y-1">
-                <h3 className="text-xl font-bold text-slate-900 tracking-tight">Emergency Successfully Triggered</h3>
-                <p className="text-slate-500">All emergency protocols have been confirmed and dispatched</p>
+                <h3 className="text-xl font-bold text-slate-900 tracking-tight">Emergency alert recorded</h3>
+                <p className="text-slate-500">The hospital inbox saved this alert. External SMS and voice are not configured.</p>
               </div>
             </div>
 
-            {/* Confirmed Delivery Checklist */}
-            <div className="space-y-2 bg-emerald-50/70 p-4 rounded-2xl border border-emerald-200 text-left text-emerald-950 font-semibold">
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-emerald-600 stroke-[3]" />
-                  <span>SMS Sent</span>
-                </span>
-                <span className="text-[11px] font-mono text-emerald-800">{contactPhone}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-emerald-600 stroke-[3]" />
-                  <span>Call Initiated</span>
-                </span>
-                <span className="text-[11px] font-mono text-emerald-800">Twilio Voice Gateway</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-emerald-600 stroke-[3]" />
-                  <span>Doctor Notified</span>
-                </span>
-                <span className="text-[11px] text-emerald-800">Dr. Rajesh Sharma, MD</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-emerald-600 stroke-[3]" />
-                  <span>Reception Notified</span>
-                </span>
-                <span className="text-[11px] text-emerald-800">OPD Front Desk Priority Alert</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-emerald-600 stroke-[3]" />
-                  <span>Timeline Updated</span>
-                </span>
-                <span className="text-[11px] text-emerald-800">Longitudinal EMR Dossier</span>
-              </div>
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-left text-slate-800 space-y-2">
+              <p>SMS status: {sosDetails?.details?.sms_status || sosDetails?.sms || "Not configured"}</p>
+              <p>Call status: {sosDetails?.details?.call_status || sosDetails?.call || "Not configured"}</p>
+              <p>Hospital inbox: {sosDetails?.doctor_notified && sosDetails?.reception_notified ? "Recorded" : "Not confirmed"}</p>
             </div>
 
             {/* Event ID Badge */}

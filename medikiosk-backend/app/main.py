@@ -7,9 +7,8 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy import text
 from app.core.config import settings
-from app.core.database import engine, Base, SessionLocal
+from app.core.database import SessionLocal
 from app.api.api_v1 import api_router
-from app.utils.seed_data import seed_initial_database
 
 # Configure Logging
 logging.basicConfig(
@@ -19,20 +18,13 @@ logging.basicConfig(
 logger = logging.getLogger("medikiosk.api")
 
 
-# Ensure database tables and initial baseline exist
-Base.metadata.create_all(bind=engine)
-with SessionLocal() as init_db:
-    seed_initial_database(init_db)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
     logger.info("MediKiosk AI backend starting up...")
-    Base.metadata.create_all(bind=engine)
-    with SessionLocal() as db:
-        seed_initial_database(db)
-    logger.info("Database schema & baseline seed verified.")
+    # Schema lifecycle is managed by Alembic. Startup must not create schema
+    # objects or insert demo/baseline records into the configured database.
+    logger.info("Database schema is managed by Alembic.")
     yield
     logger.info("MediKiosk AI backend shutting down...")
 

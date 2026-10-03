@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from "react";
 import { AppLayout } from "@/components/AppLayout";
 import { useAuth } from "@/lib/auth-context";
-import { useHospital } from "@/lib/hospital-context";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import {
@@ -27,100 +26,106 @@ import {
 
 export default function ReceptionDashboardPage() {
   const { user } = useAuth();
-  const { selectedHospital } = useHospital();
 
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeTab, setActiveTab] = useState<"QUEUE" | "REGISTER" | "APPOINTMENTS">("QUEUE");
+  const [activeTab, setActiveTab] = useState<"QUEUE" | "REGISTER" | "APPOINTMENTS">("QUEUE");  const [queueList, setQueueList] = useState<any[]>([]);
+  const [registrationOptions, setRegistrationOptions] = useState<{ hospitals: { id: string; name: string }[]; departments: { id: string; hospital_id: string; name: string }[] }>({ hospitals: [], departments: [] });
+  const [hospitalId, setHospitalId] = useState("");
+  const [departmentId, setDepartmentId] = useState("");
+  const [queueLoading, setQueueLoading] = useState(false);
 
   // Registration Form
   const [patientName, setPatientName] = useState("");
   const [phone, setPhone] = useState("");
-  const [age, setAge] = useState("35");
-  const [gender, setGender] = useState("Male");
-  const [department, setDepartment] = useState("Cardiology OPD");
-  const [complaint, setComplaint] = useState("Acute headache and fever");
+  const [complaint, setComplaint] = useState("");
   const [registering, setRegistering] = useState(false);
   // Real-Time Incoming Emergency Alert State
-  const [emergencyAlert, setEmergencyAlert] = useState<{
-    event_id: string;
-    patient_name: string;
-    location: string;
-    vitals: string;
-    er_prepared: boolean;
-    timestamp: string;
-  } | null>({
-    event_id: "EMERG-20260903-001",
-    patient_name: "Vikram Malhotra",
-    location: "Kiosk Station 1 - Ground Floor OPD Block",
-    vitals: "HR 108 bpm - SpO2 94% - BP 140/95",
-    er_prepared: false,
-    timestamp: "Just now",
-  });
+  const [emergencyAlert, setEmergencyAlert] = useState<any | null>(null);
+
+  const loadQueue = async (targetHospitalId = hospitalId, targetDepartmentId = departmentId) => {
+    if (!targetHospitalId) { setQueueList([]); setQueueLoading(false); return; }
+    try {
+      setQueueLoading(true);
+      const res = await api.reception.getTodayQueue(targetHospitalId, targetDepartmentId || undefined);
+      if (!res.success || !res.data) throw new Error(res.message || "Queue could not be loaded");
+      setQueueList(res.data.queue.map((item: any) => ({
+        queue_id: item.queue_id, visit_id: item.visit_id, token: item.token_number,
+        name: item.patient_name, age: item.patient_age, gender: item.patient_gender,
+        phone: "", dept: item.department_name, doctor: item.doctor_name || "",
+        status: item.queue_status, time: new Date(item.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      })));
+    } catch {
+      setQueueList([]);
+      toast.error("Unable to load today's queue.");
+    } finally { setQueueLoading(false); }
+  };
+
+  useEffect(() => {
+    let active = true;
+    api.reception.getOptions().then((res) => {
+      if (!res.success || !res.data) throw new Error("Reception options unavailable");
+      if (!active) return;
+      setRegistrationOptions(res.data);
+      const initialHospital = user?.hospital_id || res.data.hospitals[0]?.id || "";
+      setHospitalId(initialHospital);
+      const firstDepartment = res.data.departments.find((item) => item.hospital_id === initialHospital)?.id || "";
+      setDepartmentId(firstDepartment);
+      void loadQueue(initialHospital, firstDepartment);
+    }).catch(() => { if (active) toast.error("Unable to load reception options."); });
+    return () => { active = false; };
+  }, [user?.hospital_id]);
 
   const handlePrepareER = async () => {
     if (!emergencyAlert) return;
     try {
-      await api.emergency.prepareER({
-        event_id: emergencyAlert.event_id,
-        staff_name: "Reception Desk 1",
-        room_number: "Trauma Bay 1",
-      });
-      setEmergencyAlert((prev) => prev ? { ...prev, er_prepared: true } : null);
-      toast.success("Emergency Alert: Trauma Bay 1 Prepared & Crash Team Dispatched!");
+      const res = await api.emergency.prepareER({ event_id: emergencyAlert.event_id, staff_name: user?.full_name || "", room_number: "" });
+      if (!res.success) throw new Error("Emergency preparation was not confirmed");
+      setEmergencyAlert((prev: any) => prev ? { ...prev, er_prepared: true } : null);
+      toast.success("Emergency room preparation confirmed by the backend.");
     } catch {
-      setEmergencyAlert((prev) => prev ? { ...prev, er_prepared: true } : null);
-      toast.success("Trauma Bay 1 Prepared!");
+      toast.error("Emergency room preparation failed. Please try again.");
     }
   };
 
-
-  // Today's Queue List
-  const [queueList, setQueueList] = useState([
-    { token: "TK-101", name: "Vikram Malhotra", age: 38, gender: "Male", phone: "9876543210", dept: "Cardiology", doctor: "Dr. Rajesh Sharma", status: "WAITING", time: "10:30 AM" },
-    { token: "TK-102", name: "Meera Nair", age: 54, gender: "Female", phone: "9845012345", dept: "General Medicine", doctor: "Dr. Anita Desai", status: "IN_ROOM", time: "10:15 AM" },
-    { token: "TK-103", name: "Rajesh Kulkarni", age: 62, gender: "Male", phone: "9740198765", dept: "Orthopedics", doctor: "Dr. Sandeep Nair", status: "WAITING", time: "10:45 AM" },
-    { token: "TK-104", name: "Sunita Patel", age: 29, gender: "Female", phone: "9820011223", dept: "Pediatrics", doctor: "Dr. Priya Patel", status: "COMPLETED", time: "09:45 AM" },
-  ]);
-
-  const handleRegisterPatient = (e: React.FormEvent) => {
+  const handleRegisterPatient = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!patientName.trim() || !phone.trim()) {
-      toast.error("Please enter patient name and mobile number");
+    if (!patientName.trim() || !phone.trim() || !hospitalId || !departmentId) {
+      toast.error("Enter the patient phone number and choose a hospital and department.");
       return;
     }
-
     setRegistering(true);
-    setTimeout(() => {
-      setRegistering(false);
-      const newToken = "TK-" + Math.floor(105 + Math.random() * 800);
-      const newEntry = {
-        token: newToken,
-        name: patientName,
-        age: parseInt(age) || 35,
-        gender,
-        phone,
-        dept: department,
-        doctor: "Dr. Rajesh Sharma",
-        status: "WAITING",
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-      setQueueList([newEntry, ...queueList]);
-      toast.success(`🎉 Walk-in Registered! Queue Token #${newToken} generated for ${patientName}`);
-      setPatientName("");
-      setPhone("");
-      setActiveTab("QUEUE");
-    }, 500);
+    try {
+      const search = await api.reception.searchPatients(phone.trim());
+      const patient = search.data?.find((item: any) => item.primary_phone === phone.trim());
+      if (!search.success || !patient) throw new Error("No registered patient matches that phone number.");
+      const patientFullName = `${patient.first_name} ${patient.last_name}`.trim().toLowerCase();
+      if (patientFullName !== patientName.trim().toLowerCase()) throw new Error("The name does not match the patient profile.");
+      const res = await api.reception.registerVisit({
+        patient_id: patient.id, hospital_id: hospitalId, department_id: departmentId,
+        chief_complaint: complaint.trim() || undefined, visit_type: "OPD_WALKIN",
+      });
+      if (!res.success || !res.data) throw new Error(res.message || "Walk-in registration was not confirmed");
+      toast.success(`Walk-in registered. Queue token ${res.data.token_display_number} created.`);
+      setPatientName(""); setPhone(""); setComplaint(""); setActiveTab("QUEUE");
+      await loadQueue();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.detail || error?.message || "Walk-in registration failed.");
+    } finally { setRegistering(false); }
   };
 
-  const handleCallNext = (token: string, name: string) => {
-    setQueueList((prev) =>
-      prev.map((q) => (q.token === token ? { ...q, status: "IN_ROOM" } : q))
-    );
-    toast.success(`📢 Token #${token} (${name}) called to Consultation Room!`);
+  const handleCallNext = async (item: any) => {
+    try {
+      const res = await api.reception.callQueueItem(item.queue_id);
+      if (!res.success || !res.data) throw new Error("Queue call was not confirmed");
+      toast.success(`Token ${res.data.token_number} called to consultation.`);
+      await loadQueue();
+    } catch {
+      toast.error("Could not call this patient. Refresh the queue and try again.");
+    }
   };
 
   const handlePrintToken = (token: string, name: string) => {
-    toast.info(`🖨️ Printing thermal token slip for #${token} (${name})...`);
+    toast.info(`🖨️ Opening print dialog for token #${token} (${name})...`);
     window.print();
   };
 
@@ -138,7 +143,7 @@ export default function ReceptionDashboardPage() {
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
               <Building2 className="w-3.5 h-3.5 text-[#2563EB]" />
-              <span>Apollo Hospitals Chennai • Main OPD Reception Desk</span>
+              <span>{registrationOptions.hospitals.find((hospital) => hospital.id === hospitalId)?.name || "Hospital not selected"} • Main OPD Reception Desk</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
               Hospital Reception & Queue Dispatch
@@ -290,7 +295,7 @@ export default function ReceptionDashboardPage() {
 
                     {item.status === "WAITING" && (
                       <button
-                        onClick={() => handleCallNext(item.token, item.name)}
+                        onClick={() => handleCallNext(item)}
                         className="ent-button-primary text-xs py-1 px-2.5"
                       >
                         <Bell className="w-3.5 h-3.5" />
@@ -329,7 +334,7 @@ export default function ReceptionDashboardPage() {
                     type="text"
                     value={patientName}
                     onChange={(e) => setPatientName(e.target.value)}
-                    placeholder="e.g. Anand Kumar"
+                    placeholder="Confirm the registered patient name"
                     className="ent-input text-xs"
                     required
                   />
@@ -340,46 +345,31 @@ export default function ReceptionDashboardPage() {
                     type="tel"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    placeholder="e.g. 9876543210"
+                    placeholder="Enter a registered patient phone number"
                     className="ent-input text-xs"
                     required
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="font-semibold text-slate-900 block">Age</label>
-                  <input
-                    type="number"
-                    value={age}
-                    onChange={(e) => setAge(e.target.value)}
-                    className="ent-input text-xs"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-900 block">Gender</label>
-                  <select
-                    value={gender}
-                    onChange={(e) => setGender(e.target.value)}
-                    className="ent-input text-xs"
-                  >
-                    <option value="Male">Male</option>
-                    <option value="Female">Female</option>
-                    <option value="Other">Other</option>
+                  <label className="font-semibold text-slate-900 block">Hospital</label>
+                  <select value={hospitalId} onChange={(e) => {
+                    const nextHospitalId = e.target.value;
+                    setHospitalId(nextHospitalId);
+                    const nextDepartment = registrationOptions.departments.find((item) => item.hospital_id === nextHospitalId)?.id || "";
+                    setDepartmentId(nextDepartment);
+                  }} className="ent-input text-xs" required>
+                    <option value="">Choose hospital</option>
+                    {registrationOptions.hospitals.map((hospital) => <option key={hospital.id} value={hospital.id}>{hospital.name}</option>)}
                   </select>
                 </div>
                 <div className="space-y-1">
                   <label className="font-semibold text-slate-900 block">Department</label>
-                  <select
-                    value={department}
-                    onChange={(e) => setDepartment(e.target.value)}
-                    className="ent-input text-xs"
-                  >
-                    <option value="Cardiology OPD">Cardiology OPD</option>
-                    <option value="General Medicine OPD">General Medicine OPD</option>
-                    <option value="Orthopedics & Spine">Orthopedics & Spine</option>
-                    <option value="Pediatrics Clinic">Pediatrics Clinic</option>
+                  <select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} className="ent-input text-xs" required>
+                    <option value="">Choose department</option>
+                    {registrationOptions.departments.filter((item) => item.hospital_id === hospitalId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                   </select>
                 </div>
               </div>
@@ -405,7 +395,7 @@ export default function ReceptionDashboardPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={registering}
+                  disabled={registering || !registrationOptions.hospitals.length || !registrationOptions.departments.length}
                   className="ent-button-primary text-xs cursor-pointer"
                 >
                   <Ticket className="w-3.5 h-3.5" />

@@ -28,20 +28,21 @@ export default function PatientProfilePage() {
   const [profile, setProfile] = useState<PatientProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [medicalHistory, setMedicalHistory] = useState<any[]>([]);
 
   const [formData, setFormData] = useState({
-    first_name: "Vikram",
-    last_name: "Malhotra",
-    email: "vikram.m@example.com",
-    secondary_phone: "+91 91234 56789",
-    address_line1: "Flat 402, Green Glen Layout, Bellandur",
-    address_line2: "Outer Ring Road",
-    city: "Bengaluru",
-    state_province: "Karnataka",
-    postal_code: "560103",
-    emergency_contact_name: "Priya Malhotra",
-    emergency_contact_phone: "+91 98765 43210",
-    emergency_contact_relation: "Spouse",
+    first_name: "",
+    last_name: "",
+    email: "",
+    secondary_phone: "",
+    address_line1: "",
+    address_line2: "",
+    city: "",
+    state_province: "",
+    postal_code: "",
+    emergency_contact_name: "",
+    emergency_contact_phone: "",
+    emergency_contact_relation: "",
     preferred_language: "en-US",
   });
 
@@ -51,24 +52,46 @@ export default function PatientProfilePage() {
         const res = await api.patient.getProfile();
         if (res.success && res.data) {
           setProfile(res.data);
+          setFormData({
+            first_name: res.data.first_name || "",
+            last_name: res.data.last_name || "",
+            email: res.data.email || "",
+            secondary_phone: res.data.secondary_phone || "",
+            address_line1: res.data.address_line1 || "",
+            address_line2: res.data.address_line2 || "",
+            city: res.data.city || "",
+            state_province: res.data.state_province || "",
+            postal_code: res.data.postal_code || "",
+            emergency_contact_name: res.data.emergency_contact_name || "",
+            emergency_contact_phone: res.data.emergency_contact_phone || "",
+            emergency_contact_relation: res.data.emergency_contact_relation || "",
+            preferred_language: res.data.preferred_language || "en-US",
+          });
+        } else {
+          toast.error(res.message || "Unable to load your profile.");
         }
-      } catch (err) {
-        console.error(err);
+      } catch {
+        toast.error("Unable to load your profile.");
       } finally {
         setLoading(false);
       }
     }
     loadProfile();
+    api.patient.getMedicalHistory().then((res) => {
+      if (res.success && Array.isArray(res.data)) setMedicalHistory(res.data);
+    }).catch(() => toast.error("Unable to load medical history."));
   }, []);
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     try {
-      await api.patient.updateProfile(formData);
+      const res = await api.patient.updateProfile(formData);
+      if (!res.success || !res.data) throw new Error(res.message || "Profile update failed");
+      setProfile(res.data);
       toast.success("Patient demographics & guardian contact updated!");
-    } catch (err) {
-      toast.success("Patient demographics & guardian contact updated!");
+    } catch {
+      toast.error("Could not update your profile. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -132,9 +155,9 @@ export default function PatientProfilePage() {
                 </div>
                 <div className="space-y-1 text-xs">
                   <h2 className="text-lg font-black">{formData.first_name} {formData.last_name}</h2>
-                  <div className="font-mono text-emerald-300 font-bold">ABHA: 91-4920-8831-0941</div>
-                  <div className="text-blue-200 text-[11px]">MRN: MRN-2026-10001 • Blood: O+</div>
-                  <div className="text-[10px] text-blue-200">DOB: 14 Jul 1988 (Age 38, Male)</div>
+                  <div className="font-mono text-emerald-300 font-bold">ABHA: {profile?.national_health_id || "Not on file"}</div>
+                  <div className="text-blue-200 text-[11px]">MRN: {profile?.hospital_mrn || "Not on file"} • Blood: {profile?.blood_group || "Not recorded"}</div>
+                  <div className="text-[10px] text-blue-200">DOB: {profile?.date_of_birth || "Not recorded"} • {profile?.gender || "Not recorded"}</div>
                 </div>
               </div>
 
@@ -151,15 +174,11 @@ export default function PatientProfilePage() {
               </h3>
 
               <div className="space-y-2 text-xs">
-                <div className="p-3 bg-rose-50 rounded-xl border border-rose-200 text-rose-950 font-semibold">
-                  ⚠️ Critical Allergy: Penicillin (Severe Anaphylaxis & Bronchospasm)
-                </div>
-                <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-950 font-semibold">
-                  🩸 Chronic Condition: Essential Hypertension (Since 2022)
-                </div>
-                <div className="p-3 bg-blue-50 rounded-xl border border-blue-200 text-blue-950 font-semibold">
-                  🩺 Chronic Condition: Type 2 Diabetes Mellitus (HbA1c 6.4%)
-                </div>
+                {medicalHistory.length ? medicalHistory.map((item) => (
+                  <div key={item.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-slate-900 font-semibold">
+                    {item.history_type}: {item.condition_name}{item.severity ? " (" + item.severity + ")" : ""}
+                  </div>
+                )) : <p className="text-slate-500">No medical history has been recorded.</p>}
               </div>
             </div>
           </div>

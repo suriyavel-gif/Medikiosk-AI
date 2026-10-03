@@ -18,6 +18,7 @@ class ConsentActionRequest(BaseModel):
     action: str = Field(..., examples=["APPROVE", "REJECT", "REVOKE"])
     digital_signature: Optional[str] = Field(None, examples=["DIGITAL_SIG_PATIENT_RajeshSharma_2026"])
     rejection_reason: Optional[str] = None
+    duration_minutes: Optional[int] = Field(None, ge=5, le=4320)
 
 
 class ConsentDetailResponse(BaseModel):

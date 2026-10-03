@@ -11,6 +11,7 @@ from sqlalchemy import (
     Text,
     ForeignKey,
     JSON,
+    Index,
     Enum as SAEnum,
     UniqueConstraint,
     CheckConstraint,
@@ -392,6 +393,22 @@ class Patient(Base):
     prescriptions = relationship("Prescription", back_populates="patient")
     reports = relationship("MedicalReport", back_populates="patient")
     intake_schedules = relationship("MedicineIntakeSchedule", back_populates="patient")
+    ai_intake_reports = relationship("AIIntakeReport", back_populates="patient", cascade="all, delete-orphan")
+
+
+class AIIntakeReport(Base):
+    __tablename__ = "ai_intake_reports"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid_str)
+    patient_id = Column(String(36), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
+    report_data = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_ai_intake_reports_patient_created_at", "patient_id", "created_at"),
+    )
+
+    patient = relationship("Patient", back_populates="ai_intake_reports")
 
 
 class KioskDevice(Base):

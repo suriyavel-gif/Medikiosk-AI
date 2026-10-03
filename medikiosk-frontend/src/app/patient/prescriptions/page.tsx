@@ -66,26 +66,7 @@ export default function PrescriptionsPage() {
       }
     } catch (err: any) {
       console.error("[Prescription AI Explainer Error]:", err);
-      // Fallback structured guide
-      const fallbackMeds = rx.items.map((item) => ({
-        medicine_name: item.medicine_name || (item as any).medicine?.brand_name || "Prescribed Medication",
-        purpose: "Prescribed for therapeutic treatment and symptom relief.",
-        morning_dose: "1 Dose (8:00 AM)",
-        afternoon_dose: "None",
-        night_dose: "1 Dose (8:00 PM)",
-        food_instruction: "After Food",
-        precautions: "Take with water after meals. Complete the full course.",
-      }));
-      setExplanationMap((prev) => ({
-        ...prev,
-        [rx.id]: {
-          simple_summary: "Take your prescribed medications after meals as scheduled. Maintain proper hydration.",
-          medicines: fallbackMeds,
-          general_advice: ["Drink warm water", "Do not skip doses", "Rest adequately"],
-          warning_signs: ["Severe allergic rash or persistent fever > 102°F"],
-        },
-      }));
-      toast.success("Prescription schedule generated");
+      toast.error(err?.response?.data?.detail || "Could not generate the prescription explanation. Please try again.");
     } finally {
       setExplainingId(null);
     }
@@ -137,7 +118,7 @@ export default function PrescriptionsPage() {
                           </span>
                         </div>
                         <div className="text-xs text-slate-500">
-                          Issued by <strong className="text-slate-800">{rx.doctor_name || "Dr. Rajesh Sharma, MD"}</strong> • {selectedHospital.name}
+                          Issued by <strong className="text-slate-800">{rx.doctor_name || "Doctor not recorded"}</strong> • {selectedHospital.name || "Hospital not recorded"}
                         </div>
                       </div>
                     </div>
@@ -155,11 +136,11 @@ export default function PrescriptionsPage() {
 
                       <button
                         type="button"
-                        onClick={() => toast.success("Prescription PDF downloaded successfully")}
+                        onClick={() => { window.print(); toast.info("Print dialog opened."); }}
                         className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs transition flex items-center gap-1.5"
                       >
                         <Download className="w-3.5 h-3.5" />
-                        <span>Download PDF</span>
+                        <span>Print prescription</span>
                       </button>
                     </div>
                   </div>
@@ -195,31 +176,12 @@ export default function PrescriptionsPage() {
                             <span className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-blue-100 text-blue-700">
                               {item.frequency}
                             </span>
-                          </div>
-
-                          {/* Daily Timing Pills */}
-                          <div className="grid grid-cols-3 gap-1.5 text-center text-xs">
-                            <div className="p-2 bg-white rounded-xl border border-slate-100 space-y-1">
-                              <Sun className="w-3.5 h-3.5 text-amber-500 mx-auto" />
-                              <span className="text-[10px] text-slate-400 block">Morning</span>
-                              <strong className="text-[11px] text-slate-800 font-bold block">1 Tab (8 AM)</strong>
-                            </div>
-                            <div className="p-2 bg-white rounded-xl border border-slate-100 space-y-1">
-                              <Sunset className="w-3.5 h-3.5 text-orange-400 mx-auto" />
-                              <span className="text-[10px] text-slate-400 block">Afternoon</span>
-                              <span className="text-[11px] text-slate-400 block">—</span>
-                            </div>
-                            <div className="p-2 bg-white rounded-xl border border-slate-100 space-y-1">
-                              <Moon className="w-3.5 h-3.5 text-indigo-500 mx-auto" />
-                              <span className="text-[10px] text-slate-400 block">Night</span>
-                              <strong className="text-[11px] text-slate-800 font-bold block">1 Tab (8 PM)</strong>
-                            </div>
-                          </div>
+                          </div>                          <p className="text-xs text-slate-600">Schedule details: {item.dosage_instruction || "Not recorded"}</p>
 
                           <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-200/60">
                             <span className="flex items-center gap-1">
                               <Coffee className="w-3 h-3 text-slate-400" />
-                              Take after food
+                              {item.special_intake_conditions || "Intake conditions not recorded"}
                             </span>
                             <span className="font-bold text-slate-700">Duration: {item.duration_days} Days</span>
                           </div>
@@ -232,11 +194,11 @@ export default function PrescriptionsPage() {
                   <div className="p-4 bg-slate-50/70 rounded-2xl border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                     <div>
                       <span className="text-slate-400 text-[10px] uppercase font-bold block">Physician's Advice</span>
-                      <p className="text-slate-700 font-medium mt-0.5">{rx.clinical_notes || "Complete the full antibiotic course. Stay hydrated."}</p>
+                      <p className="text-slate-700 font-medium mt-0.5">{rx.clinical_notes || "No advice recorded."}</p>
                     </div>
                     <div className="text-right sm:border-l sm:border-slate-200 sm:pl-4">
                       <div className="text-[10px] text-slate-400">Digitally Verified & Signed</div>
-                      <div className="font-extrabold text-blue-700">{rx.doctor_name || "Dr. Rajesh Sharma, MD"}</div>
+                      <div className="font-extrabold text-blue-700">{rx.doctor_name || "Doctor not recorded"}</div>
                     </div>
                   </div>
                 </div>

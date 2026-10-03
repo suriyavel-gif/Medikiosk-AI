@@ -44,7 +44,8 @@ class ConsentService:
         if active_consent:
             return ConsentDetailResponse.model_validate(active_consent)
 
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=req.expiry_hours)
+        permission_minutes = (req.expiry_hours * 60) if req.expiry_hours else (req.expiry_minutes or 30)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=permission_minutes)
         dummy_sig = f"PENDING_SIG_REQ_DOC_{doctor_id[:8]}_{datetime.now(timezone.utc).timestamp()}"
 
         consent = Consent(
@@ -57,6 +58,8 @@ class ConsentService:
             granted_language=patient.preferred_language,
             digital_signature_blob=dummy_sig,
             ip_address=client_ip,
+            purpose=req.purpose,
+            permission_minutes=permission_minutes,
             expires_at=expires_at,
         )
         db.add(consent)
@@ -117,6 +120,9 @@ class ConsentService:
         action_upper = req.action.upper()
         if action_upper == "APPROVE":
             consent.status = ConsentStatusEnum.GRANTED
+            if req.duration_minutes:
+                consent.permission_minutes = req.duration_minutes
+                consent.expires_at = datetime.now(timezone.utc) + timedelta(minutes=req.duration_minutes)
             sig_payload = f"{patient_id}:{consent.doctor_id}:{consent.id}:{datetime.now(timezone.utc).isoformat()}"
             consent.digital_signature_blob = hashlib.sha256(sig_payload.encode()).hexdigest()
             audit_action = AuditActionEnum.CONSENT_GIVEN
@@ -211,4 +217,3 @@ class ConsentService:
 
         db.commit()
         return len(consents)
-

@@ -39,121 +39,13 @@ export default function ConsentPage() {
   const [loading, setLoading] = useState(false);
 
   // Live Consent Requests from Backend
-  const [requests, setRequests] = useState<any[]>([
-    {
-      id: "REQ-CONSENT-2026-001",
-      patient_id: "569589b7-bcd1-49e7-a886-dd5199c46838",
-      patient_name: "Vikram Malhotra",
-      doctor_id: "DOC-CARD-001",
-      doctor_name: "Dr. Rajesh Sharma, MD",
-      hospital_name: "Apollo Hospitals Chennai",
-      department: "Cardiology Consultation OPD",
-      purpose: "Diagnosis Consultation & Cardiac History Synthesis",
-      reason: "Diagnosis",
-      duration_text: "24 Hours (Today)",
-      duration_minutes: 1440,
-      doctor_notes: "Reviewing past ECGs, Echo reports, and antihypertensive prescriptions.",
-      status: "PENDING",
-      requested_at: "Today • 07:45 AM",
-    },
-    {
-      id: "REQ-CONSENT-2026-002",
-      patient_id: "569589b7-bcd1-49e7-a886-dd5199c46838",
-      patient_name: "Vikram Malhotra",
-      doctor_id: "DOC-GEN-002",
-      doctor_name: "Dr. Anita Desai, MD",
-      hospital_name: "Fortis Hospital Bangalore",
-      department: "Internal Medicine",
-      purpose: "Routine Diabetic Checkup & Lab Review",
-      reason: "Follow-up",
-      duration_text: "Until Manually Revoked",
-      duration_minutes: 43200,
-      doctor_notes: "Glycemic monitoring review.",
-      status: "APPROVED",
-      requested_at: "Yesterday • 11:30 AM",
-      expires_at: "In 29 Days",
-      approved_at: "Yesterday • 11:32 AM",
-    },
-  ]);
+  const [requests, setRequests] = useState<any[]>([]);
 
   // Consent Ledger Data
-  const [ledger, setLedger] = useState<any[]>([
-    {
-      id: "LEDGER-01",
-      time: "10:20 AM",
-      date: "Today",
-      action: "APPROVED",
-      doctor_name: "Dr. Rajesh Sharma",
-      hospital: "Apollo Hospitals Chennai",
-      department: "Cardiology",
-      duration: "24 Hours",
-      badge_color: "bg-emerald-100 text-emerald-800",
-    },
-    {
-      id: "LEDGER-02",
-      time: "11:45 AM",
-      date: "Today",
-      action: "REVOKED",
-      doctor_name: "Dr. Sanjay Gupta",
-      hospital: "Manipal Hospital",
-      department: "Inpatient Ward",
-      duration: "Revoked Manually",
-      badge_color: "bg-rose-100 text-rose-800",
-    },
-    {
-      id: "LEDGER-03",
-      time: "04:15 PM",
-      date: "Yesterday",
-      action: "APPROVED",
-      doctor_name: "Apollo Cardiology OPD",
-      hospital: "Apollo Hospitals Chennai",
-      department: "Cardiology",
-      duration: "8 Hours",
-      badge_color: "bg-emerald-100 text-emerald-800",
-    },
-    {
-      id: "LEDGER-04",
-      time: "09:00 AM",
-      date: "Today",
-      action: "REJECTED",
-      doctor_name: "Dr. Kumar",
-      hospital: "Care Hospitals",
-      department: "Dermatology",
-      duration: "Access Denied",
-      badge_color: "bg-amber-100 text-amber-800",
-    },
-  ]);
+  const [ledger, setLedger] = useState<any[]>([]);
 
   // Doctor Activity Logs
-  const [activityLogs, setActivityLogs] = useState<any[]>([
-    {
-      id: "ACT-01",
-      doctor_name: "Dr. Rajesh Sharma, MD",
-      hospital: "Apollo Hospitals Chennai",
-      record_type: "Longitudinal Prescriptions & Dosage History",
-      timestamp: "Today • 07:35 AM",
-      duration: "4 mins",
-      ip_address: "192.168.1.42 (Hospital Intranet Gateway)",
-    },
-    {
-      id: "ACT-02",
-      doctor_name: "Dr. Rajesh Sharma, MD",
-      hospital: "Apollo Hospitals Chennai",
-      record_type: "Diagnostic Lab Reports (CBC, Renal Panel, HbA1c)",
-      timestamp: "Today • 07:38 AM",
-      duration: "3 mins",
-      ip_address: "192.168.1.42 (Hospital Intranet Gateway)",
-    },
-    {
-      id: "ACT-03",
-      doctor_name: "Dr. Anita Desai, MD",
-      hospital: "Fortis Hospital Bangalore",
-      record_type: "Brain MRI Scan & Radiology PACS Images",
-      timestamp: "Yesterday • 02:15 PM",
-      duration: "8 mins",
-      ip_address: "10.0.4.118 (Radiology Workstation 3)",
-    },
-  ]);
+  const [activityLogs, setActivityLogs] = useState<any[]>([]);
 
   // Approval Modal with Duration Selector
   const [selectedRequestForApproval, setSelectedRequestForApproval] = useState<any | null>(null);
@@ -161,25 +53,26 @@ export default function ConsentPage() {
 
   // Load latest state from backend
   const refreshRequests = async () => {
+    if (!user?.id || user.role !== "PATIENT") return;
     try {
-      const res = await api.consent.getRequests({ patient_id: "569589b7-bcd1-49e7-a886-dd5199c46838" });
-      if (res.success && res.requests) {
-        setRequests(res.requests);
-      }
-      const ledgerRes = await api.consent.getLedger("569589b7-bcd1-49e7-a886-dd5199c46838");
-      if (ledgerRes.success && ledgerRes.ledger) {
-        setLedger(ledgerRes.ledger);
-      }
+      const [requestRes, ledgerRes, activityRes] = await Promise.all([
+        api.consent.getRequests({ patient_id: user.id }),
+        api.consent.getLedger(user.id),
+        api.consent.getActivityLogs(user.id),
+      ]);
+      if (requestRes.success) setRequests(requestRes.requests || []);
+      if (ledgerRes.success) setLedger(ledgerRes.ledger || []);
+      if (activityRes.success) setActivityLogs(activityRes.logs || []);
     } catch {
-      // Retain pre-seeded demo state
+      toast.error("Unable to load consent records. Please try again.");
     }
   };
 
   useEffect(() => {
     refreshRequests();
-    const interval = setInterval(refreshRequests, 3000);
+    const interval = setInterval(refreshRequests, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [user?.id, user?.role]);
 
   const handleOpenApproveModal = (req: any) => {
     setSelectedRequestForApproval(req);
@@ -188,59 +81,35 @@ export default function ConsentPage() {
   const handleConfirmApproval = async () => {
     if (!selectedRequestForApproval) return;
     try {
-      await api.consent.takeAction(selectedRequestForApproval.id, "APPROVE", approvalDuration);
-      setRequests((prev) =>
-        prev.map((r) =>
-          r.id === selectedRequestForApproval.id
-            ? { ...r, status: "APPROVED", duration_text: approvalDuration, expires_at: `Expires in ${approvalDuration}` }
-            : r
-        )
-      );
-      toast.success(`✓ Access Granted to ${selectedRequestForApproval.doctor_name} for ${approvalDuration}`);
+      const result = await api.consent.takeAction(selectedRequestForApproval.id, "APPROVE", approvalDuration);
+      if (!result.success) throw new Error("Consent approval was not confirmed");
+      toast.success(`Access granted to ${selectedRequestForApproval.doctor_name} for ${approvalDuration}`);
       setSelectedRequestForApproval(null);
-      refreshRequests();
+      await refreshRequests();
     } catch {
-      setRequests((prev) =>
-        prev.map((r) =>
-          r.id === selectedRequestForApproval.id
-            ? { ...r, status: "APPROVED", duration_text: approvalDuration, expires_at: `Expires in ${approvalDuration}` }
-            : r
-        )
-      );
-      toast.success(`✓ Access Granted to ${selectedRequestForApproval.doctor_name} for ${approvalDuration}`);
-      setSelectedRequestForApproval(null);
+      toast.error("Consent approval failed. Please try again.");
     }
   };
 
   const handleReject = async (reqId: string, doctorName: string) => {
     try {
-      await api.consent.takeAction(reqId, "REJECT");
-      setRequests((prev) =>
-        prev.map((r) => (r.id === reqId ? { ...r, status: "REJECTED" } : r))
-      );
-      toast.error(`✕ Consent Request Rejected for ${doctorName}`);
-      refreshRequests();
+      const result = await api.consent.takeAction(reqId, "REJECT");
+      if (!result.success) throw new Error("Consent rejection was not confirmed");
+      toast.success(`Consent request rejected for ${doctorName}`);
+      await refreshRequests();
     } catch {
-      setRequests((prev) =>
-        prev.map((r) => (r.id === reqId ? { ...r, status: "REJECTED" } : r))
-      );
-      toast.error(`✕ Consent Request Rejected for ${doctorName}`);
+      toast.error("Consent rejection failed. Please try again.");
     }
   };
 
   const handleRevoke = async (reqId: string, doctorName: string) => {
     try {
-      await api.consent.takeAction(reqId, "REVOKE");
-      setRequests((prev) =>
-        prev.map((r) => (r.id === reqId ? { ...r, status: "REVOKED" } : r))
-      );
-      toast.info(`🚫 Access Revoked for ${doctorName}. Doctor has lost permission.`);
-      refreshRequests();
+      const result = await api.consent.takeAction(reqId, "REVOKE");
+      if (!result.success) throw new Error("Consent revocation was not confirmed");
+      toast.success(`Access revoked for ${doctorName}`);
+      await refreshRequests();
     } catch {
-      setRequests((prev) =>
-        prev.map((r) => (r.id === reqId ? { ...r, status: "REVOKED" } : r))
-      );
-      toast.info(`🚫 Access Revoked for ${doctorName}. Doctor has lost permission.`);
+      toast.error("Consent revocation failed. Please try again.");
     }
   };
 

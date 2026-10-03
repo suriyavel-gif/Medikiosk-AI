@@ -2,39 +2,24 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { AppLayout } from "@/components/AppLayout";
 import { useAuth } from "@/lib/auth-context";
-import { useHospital } from "@/lib/hospital-context";
-import { useLanguage } from "@/lib/language-context";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Calendar,
   Sparkles,
-  Clock,
-  Building2,
-  Stethoscope,
-  MapPin,
   CheckCircle2,
   ArrowRight,
-  ShieldCheck,
-  Activity,
-  AlertTriangle,
   AlertCircle,
-  FileSpreadsheet,
-  FileText,
-  Printer,
   RefreshCw,
   Eye,
   Edit3,
-  HelpCircle,
   X,
 } from "lucide-react";
 
 interface LatestIntakeReport {
   id: string;
-  patient_id: string;
   created_at: string;
   hospital_name: string;
   chief_complaint: string;
@@ -60,11 +45,24 @@ interface LatestIntakeReport {
   disclaimer: string;
 }
 
+interface BookingConfirmation {
+  appointmentNumber: string;
+  hospital?: string;
+  doctor?: string;
+  department?: string;
+  date: string;
+  time: string;
+}
+
+function getLocalDateString(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 export default function BookAppointmentPage() {
-  const router = useRouter();
   const { user } = useAuth();
-  const { selectedHospital } = useHospital();
-  const { language, t } = useLanguage();
 
   // Latest AI Clinical Intake Report State (Single Source of Truth)
   const [loadingReport, setLoadingReport] = useState(true);
@@ -72,103 +70,126 @@ export default function BookAppointmentPage() {
   const [showFullReportModal, setShowFullReportModal] = useState(false);
 
   // Booking Parameters
-  const [hospital, setHospital] = useState("Apollo Hospitals Chennai");
-  const [doctor, setDoctor] = useState("Dr. Rajesh Sharma, MD");
-  const [department, setDepartment] = useState("Cardiology");
-  const [date, setDate] = useState("2026-09-04");
+  const [appointmentOptions, setAppointmentOptions] = useState<{
+    hospitals: { id: string; name: string }[];
+    departments: { id: string; hospital_id: string; name: string; specialty_type: string }[];
+    doctors: { id: string; hospital_id: string; department_id: string; name: string; specialty: string }[];
+  } | null>(null);
+  const [loadingOptions, setLoadingOptions] = useState(true);
+  const [hospitalId, setHospitalId] = useState("");
+  const [doctorId, setDoctorId] = useState("");
+  const [departmentId, setDepartmentId] = useState("");
+  const [date, setDate] = useState(() => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
+  });
   const [time, setTime] = useState("10:30 AM");
   const [bookingLoading, setBookingLoading] = useState(false);
-  const [bookingSuccess, setBookingSuccess] = useState<any | null>(null);
+  const [bookingSuccess, setBookingSuccess] = useState<BookingConfirmation | null>(null);
 
-  const availableHospitals = [
-    "Apollo Hospitals Chennai",
-    "Government General Hospital",
-    "AIIMS Delhi",
-    "CMC Vellore",
-    "Kauvery Hospital",
-  ];
+  const availableDepartments = appointmentOptions?.departments.filter((d) => d.hospital_id === hospitalId) || [];
+  const availableDoctors = appointmentOptions?.doctors.filter(
+    (d) => d.hospital_id === hospitalId && d.department_id === departmentId
+  ) || [];
+  const selectedHospital = appointmentOptions?.hospitals.find((h) => h.id === hospitalId);
+  const selectedDepartment = availableDepartments.find((d) => d.id === departmentId);
+  const selectedDoctor = availableDoctors.find((d) => d.id === doctorId);
+
+  useEffect(() => {
+    if (!user || user.role !== "PATIENT") return;
+    let active = true;
+    api.appointments.getBookingOptions()
+      .then((res) => {
+        if (!active) return;
+        if (!res.success || !res.data) throw new Error("Appointment options were not returned");
+        setAppointmentOptions(res.data);
+        const firstHospital = res.data.hospitals[0];
+        const firstDepartment = res.data.departments.find((d) => d.hospital_id === firstHospital?.id);
+        const firstDoctor = res.data.doctors.find(
+          (d) => d.hospital_id === firstHospital?.id && d.department_id === firstDepartment?.id
+        );
+        if (firstHospital) setHospitalId(firstHospital.id);
+        if (firstDepartment) setDepartmentId(firstDepartment.id);
+        if (firstDoctor) setDoctorId(firstDoctor.id);
+        if (!firstHospital || !firstDepartment || !firstDoctor) toast.error("No active appointment options are available.");
+      })
+      .catch(() => {
+        if (active) toast.error("Unable to load appointment options. Please try again.");
+      })
+      .finally(() => {
+        if (active) setLoadingOptions(false);
+      });
+    return () => { active = false; };
+  }, [user]);
 
   // Fetch Latest Active AI Clinical Intake Report on mount
   useEffect(() => {
     async function loadLatestIntake() {
       setLoadingReport(true);
       try {
-        const pId = user?.id || "569589b7-bcd1-49e7-a886-dd5199c46838";
-        const res = await api.ai.getLatestIntakeReport(pId);
+        if (!user?.id || user.role !== "PATIENT") return;
+        const res = await api.ai.getLatestIntakeReport(user.id);
         if (res.success && res.data) {
           const rep = res.data;
           setIntakeReport(rep);
-          if (rep.recommended_department) {
-            setDepartment(rep.recommended_department);
-          }
-          if (rep.hospital_name) {
-            setHospital(rep.hospital_name);
-          }
-          if (rep.recommended_department === "Cardiology") {
-            setDoctor("Dr. Rajesh Sharma, MD");
-          } else if (rep.recommended_department === "Neurology") {
-            setDoctor("Dr. Anita Desai, MD");
-          } else if (rep.recommended_department === "Orthopedics") {
-            setDoctor("Dr. Sandeep Nair, MS");
-          } else {
-            setDoctor("Dr. Priya Raman, MD");
-          }
         }
       } catch {
-        // Fallback default report
-        setIntakeReport({
-          id: "RPT-INTAKE-2026-001",
-          patient_id: "569589b7-bcd1-49e7-a886-dd5199c46838",
-          created_at: "2026-09-03T07:15:00Z",
-          hospital_name: "Apollo Hospitals Chennai",
-          chief_complaint: "Chest pain with breathing difficulty",
-          symptoms: ["Substernal chest pressure", "Left shoulder radiation", "Shortness of breath on exertion"],
-          duration: "2 days",
-          severity: "Severe (8/10)",
-          risk: "HIGH",
-          medical_history: ["Essential Hypertension", "Type 2 Diabetes"],
-          current_medications: ["Telmisartan 40mg OD", "Metformin 500mg SR BD"],
-          allergies: ["Penicillin Anaphylaxis"],
-          vitals: { bp: "128/82 mmHg", hr: "78 BPM", spo2: "98%", temperature: "98.4 °F" },
-          preliminary_assessment: "Patient reports intermittent chest pain radiating to left shoulder with mild shortness of breath. AI recommends urgent cardiology consultation and 12-lead ECG evaluation.",
-          suggested_otc_medicines: [],
-          recommended_department: "Cardiology",
-          recommended_action: "Urgent in-person cardiology consultation recommended today. Avoid physical exertion.",
-          warning_signs: ["Crushing chest pressure", "Severe breathlessness or syncope"],
-          follow_up: "Immediate clinical review by attending cardiologist.",
-          disclaimer: "This is an AI-assisted preliminary assessment and not a confirmed medical diagnosis.",
-        });
+        setIntakeReport(null);
+        toast.error("Unable to load your saved intake report.");
       } finally {
         setLoadingReport(false);
       }
     }
 
-    loadLatestIntake();
+    if (user?.id && user.role === "PATIENT") loadLatestIntake();
+    else setLoadingReport(false);
   }, [user]);
 
-  // Handle Book Appointment using the Loaded AI Intake Report
-  const handleConfirmBooking = () => {
-    setBookingLoading(true);
+  // Persist the appointment through the authenticated patient API.
+  const handleConfirmBooking = async () => {
+    if (!user || user.role !== "PATIENT") {
+      toast.error("Please sign in with a patient account before booking.");
+      return;
+    }
+    if (!hospitalId || !departmentId || !doctorId) {
+      toast.error("Select an active hospital, department, and doctor.");
+      return;
+    }
+    const timeMatch = time.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (!timeMatch) {
+      toast.error("Select a valid appointment time.");
+      return;
+    }
+    let hours = Number(timeMatch[1]) % 12;
+    if (timeMatch[3].toUpperCase() === "PM") hours += 12;
 
-    setTimeout(() => {
-      setBookingLoading(false);
-      const token = "TK-" + Math.floor(100 + Math.random() * 900);
-      const bookingPayload = {
-        token,
-        hospital,
-        doctor,
-        department: intakeReport?.recommended_department || department,
+    setBookingLoading(true);
+    try {
+      const scheduledStart = new Date(`${date}T${String(hours).padStart(2, "0")}:${timeMatch[2]}:00`);
+      const res = await api.appointments.create({
+        hospital_id: hospitalId,
+        department_id: departmentId,
+        doctor_id: doctorId,
+        scheduled_start_time: scheduledStart.toISOString(),
+      });
+      if (!res.success || !res.data) throw new Error(res.message || "Booking was not confirmed by the server");
+
+      setBookingSuccess({
+        appointmentNumber: res.data.appointment_number,
+        hospital: selectedHospital?.name,
+        doctor: selectedDoctor?.name,
+        department: selectedDepartment?.name,
         date,
         time,
-        risk: intakeReport?.risk || "STANDARD",
-        chief_complaint: intakeReport?.chief_complaint || "Routine consultation",
-        symptoms: intakeReport?.symptoms || [],
-        ai_assessment: intakeReport?.preliminary_assessment || "Outpatient physician review",
-      };
-
-      setBookingSuccess(bookingPayload);
-      toast.success(`🎉 Appointment Booked! Priority Token #${token} generated from AI Triage Report.`);
-    }, 500);
+      });
+      toast.success(`Appointment ${res.data.appointment_number} booked successfully.`);
+    } catch {
+      setBookingSuccess(null);
+      toast.error("Appointment booking failed. Please review the selected details and try again.");
+    } finally {
+      setBookingLoading(false);
+    }
   };
 
   return (
@@ -209,14 +230,14 @@ export default function BookAppointmentPage() {
             <div className="space-y-1">
               <h2 className="text-2xl font-bold text-slate-900">Appointment Confirmed</h2>
               <p className="text-xs text-slate-500">
-                Your appointment has been booked directly from your latest <strong className="text-slate-700">AI Clinical Intake Report</strong>.
+              Your appointment has been saved to your patient record.
               </p>
             </div>
 
             <div className="p-5 rounded-2xl bg-[#F8FAFC] border border-slate-200 text-left text-xs space-y-3">
               <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                <span className="text-slate-500 font-semibold">Priority Token</span>
-                <strong className="text-base font-bold text-[#2563EB] font-mono">#{bookingSuccess.token}</strong>
+                <span className="text-slate-500 font-semibold">Appointment Number</span>
+                <strong className="text-base font-bold text-[#2563EB] font-mono">{bookingSuccess.appointmentNumber}</strong>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-500 font-semibold">Facility</span>
@@ -229,16 +250,6 @@ export default function BookAppointmentPage() {
               <div className="flex items-center justify-between">
                 <span className="text-slate-500 font-semibold">Department</span>
                 <span className="text-slate-700 font-bold">{bookingSuccess.department}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500 font-semibold">Triage Priority</span>
-                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                  bookingSuccess.risk === "CRITICAL" ? "bg-rose-100 text-rose-900" :
-                  bookingSuccess.risk === "HIGH" ? "bg-amber-100 text-amber-900" :
-                  bookingSuccess.risk === "MEDIUM" ? "bg-yellow-100 text-yellow-900" : "bg-emerald-100 text-emerald-900"
-                }`}>
-                  {bookingSuccess.risk} RISK
-                </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-500 font-semibold">Scheduled Slot</span>
@@ -336,7 +347,7 @@ export default function BookAppointmentPage() {
 
                     <div className="p-3.5 bg-[#F8FAFC] rounded-xl border border-slate-200/80 space-y-0.5">
                       <span className="text-[10px] font-bold text-slate-400 uppercase">Assigned Specialist</span>
-                      <strong className="text-xs font-bold text-slate-900 block">{doctor}</strong>
+                      <strong className="text-xs font-bold text-slate-900 block">{selectedDoctor?.name || "Select a specialist"}</strong>
                     </div>
                   </div>
 
@@ -408,19 +419,29 @@ export default function BookAppointmentPage() {
             <div className="bg-white border border-slate-200/80 rounded-2xl p-6 sm:p-8 shadow-xs space-y-6 text-xs">
               <div className="border-b border-slate-100 pb-3">
                 <h2 className="text-lg font-bold text-slate-900">Appointment Slot & Facility</h2>
-                <p className="text-xs text-slate-500">Auto-configured based on your active AI Triage assessment</p>
+                <p className="text-xs text-slate-500">Choose an active facility, department, specialist, date, and time</p>
               </div>
 
               <div className="space-y-4">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600 mb-1">Healthcare Facility</label>
                   <select
-                    value={hospital}
-                    onChange={(e) => setHospital(e.target.value)}
+                    value={hospitalId}
+                    disabled={loadingOptions || !appointmentOptions?.hospitals.length}
+                    onChange={(e) => {
+                      const nextHospitalId = e.target.value;
+                      const nextDepartment = appointmentOptions?.departments.find((d) => d.hospital_id === nextHospitalId);
+                      const nextDoctor = appointmentOptions?.doctors.find(
+                        (d) => d.hospital_id === nextHospitalId && d.department_id === nextDepartment?.id
+                      );
+                      setHospitalId(nextHospitalId);
+                      setDepartmentId(nextDepartment?.id || "");
+                      setDoctorId(nextDoctor?.id || "");
+                    }}
                     className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 font-semibold focus:bg-white focus:outline-none focus:border-[#2563EB]"
                   >
-                    {availableHospitals.map((h, i) => (
-                      <option key={i} value={h}>{h}</option>
+                    {(appointmentOptions?.hospitals || []).map((h) => (
+                      <option key={h.id} value={h.id}>{h.name}</option>
                     ))}
                   </select>
                 </div>
@@ -428,22 +449,33 @@ export default function BookAppointmentPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600 mb-1">Clinical Department</label>
-                    <input
-                      type="text"
-                      readOnly
-                      value={intakeReport?.recommended_department || department}
-                      className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-xl text-xs text-slate-800 font-bold cursor-not-allowed"
-                    />
+                    <select
+                      value={departmentId}
+                      disabled={!availableDepartments.length}
+                      onChange={(e) => {
+                        const nextDepartmentId = e.target.value;
+                        const nextDoctor = appointmentOptions?.doctors.find(
+                          (d) => d.hospital_id === hospitalId && d.department_id === nextDepartmentId
+                        );
+                        setDepartmentId(nextDepartmentId);
+                        setDoctorId(nextDoctor?.id || "");
+                      }}
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 font-semibold focus:bg-white focus:outline-none focus:border-[#2563EB]"
+                    >
+                      {availableDepartments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
                   </div>
 
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600 mb-1">Attending Specialist</label>
-                    <input
-                      type="text"
-                      readOnly
-                      value={doctor}
-                      className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-xl text-xs text-slate-800 font-bold cursor-not-allowed"
-                    />
+                    <select
+                      value={doctorId}
+                      disabled={!availableDoctors.length}
+                      onChange={(e) => setDoctorId(e.target.value)}
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 font-semibold focus:bg-white focus:outline-none focus:border-[#2563EB]"
+                    >
+                      {availableDoctors.map((d) => <option key={d.id} value={d.id}>{d.name} — {d.specialty}</option>)}
+                    </select>
                   </div>
                 </div>
 
@@ -453,22 +485,23 @@ export default function BookAppointmentPage() {
                     <input
                       type="date"
                       value={date}
+                      min={getLocalDateString(new Date())}
                       onChange={(e) => setDate(e.target.value)}
                       className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 font-semibold focus:bg-white focus:outline-none focus:border-[#2563EB]"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Available Slot</label>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Preferred Slot</label>
                     <select
                       value={time}
                       onChange={(e) => setTime(e.target.value)}
                       className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 font-semibold focus:bg-white focus:outline-none focus:border-[#2563EB]"
                     >
-                      <option value="10:30 AM">10:30 AM (Available)</option>
-                      <option value="11:00 AM">11:00 AM (Available)</option>
-                      <option value="02:30 PM">02:30 PM (Available)</option>
-                      <option value="04:00 PM">04:00 PM (Available)</option>
+                      <option value="10:30 AM">10:30 AM</option>
+                      <option value="11:00 AM">11:00 AM</option>
+                      <option value="02:30 PM">02:30 PM</option>
+                      <option value="04:00 PM">04:00 PM</option>
                     </select>
                   </div>
                 </div>
@@ -479,7 +512,7 @@ export default function BookAppointmentPage() {
                 <button
                   type="button"
                   onClick={handleConfirmBooking}
-                  disabled={bookingLoading}
+                  disabled={bookingLoading || loadingOptions || !hospitalId || !departmentId || !doctorId || user?.role !== "PATIENT"}
                   className="w-full ent-button-primary bg-emerald-600 hover:bg-emerald-700 text-xs py-3 justify-center shadow-xs cursor-pointer font-bold"
                 >
                   {bookingLoading ? (
@@ -495,7 +528,7 @@ export default function BookAppointmentPage() {
                   )}
                 </button>
                 <p className="text-[10px] text-center text-slate-400">
-                  Transmits verified AI Triage symptoms, vital telemetry, and risk stratification to doctor workstation
+                  Booking is confirmed only after the hospital validates and saves the selected appointment.
                 </p>
               </div>
             </div>

@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { AppLayout } from "@/components/AppLayout";
-import { useHospital } from "@/lib/hospital-context";
+
 import { useAuth } from "@/lib/auth-context";
 import { useLanguage } from "@/lib/language-context";
 import { api } from "@/lib/api";
@@ -84,15 +84,15 @@ interface AIReportAnalysisResult {
 }
 
 export default function MedicalReportIntelligencePage() {
-  const { selectedHospital } = useHospital();
+
   const { user } = useAuth();
   const { language, setLanguage, t } = useLanguage();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Upload & File State
-  const [file, setFile] = useState<File | null>(null);
-  const [documentType, setDocumentType] = useState<string>("BLOOD_TEST");
-  const [extractedText, setExtractedText] = useState<string>("");
+
+
+
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedLanguage, setSelectedLanguage] = useState<string>(language || "en");
 
@@ -102,195 +102,64 @@ export default function MedicalReportIntelligencePage() {
   const [imageQualityError, setImageQualityError] = useState<string | null>(null);
 
   // Current Analysis Output State
-  const [analysisResult, setAnalysisResult] = useState<AIReportAnalysisResult | null>({
-    report_title: "Comprehensive Blood & Metabolic Report",
-    test_type: "BLOOD_TEST",
-    test_purpose: "To evaluate blood oxygen capacity, fasting blood sugar, kidney filtration, and lipid profiles.",
-    overall_status: "MILD_CONCERN",
-    status_badge: "Mild Concern",
-    summary_plain_english:
-      "Your blood test results show that your kidney function, liver health, and blood sugar levels are healthy and normal. However, your hemoglobin is slightly lower than ideal (11.2 g/dL), which indicates mild iron-deficiency anemia. Increasing iron-rich vegetables and whole grains will help restore your natural vitality.",
-    parameters: [
-      {
-        name: "Hemoglobin (Hb)",
-        value: "11.2",
-        unit: "g/dL",
-        reference_range: "12.0 - 15.5",
-        status: "BORDERLINE",
-        meaning: "Your blood has slightly less hemoglobin than normal, meaning your red blood cells carry slightly less oxygen.",
-        recommendation: "Increase iron-rich foods such as spinach, beans, beetroot, lentils, and pomegranate. Consult physician if fatigue persists.",
-        category: "Blood Counts",
-      },
-      {
-        name: "Serum Creatinine",
-        value: "0.9",
-        unit: "mg/dL",
-        reference_range: "0.7 - 1.3",
-        status: "NORMAL",
-        meaning: "Your kidneys are filtering waste from your blood normally and efficiently.",
-        recommendation: "Continue drinking 2 to 3 liters of water daily to maintain optimal kidney hydration.",
-        category: "Kidney Function",
-      },
-      {
-        name: "Fasting Blood Sugar",
-        value: "98",
-        unit: "mg/dL",
-        reference_range: "70 - 100",
-        status: "NORMAL",
-        meaning: "Your resting blood glucose is within the optimal healthy range.",
-        recommendation: "Maintain your balanced meal schedule and regular daily walking.",
-        category: "Metabolic Health",
-      },
-      {
-        name: "Total Cholesterol",
-        value: "208",
-        unit: "mg/dL",
-        reference_range: "< 200",
-        status: "BORDERLINE",
-        meaning: "Slightly elevated circulating lipids in your bloodstream.",
-        recommendation: "Incorporate fiber-rich oats, walnuts, and minimize deep-fried food intake.",
-        category: "Lipid Profile",
-      },
-    ],
-    organ_system_status: {
-      "Kidney Function": "Normal",
-      "Liver Function": "Normal",
-      "Heart Markers": "Normal",
-      "Blood & Oxygen": "Mild Concern",
-    },
-    possible_health_concerns: ["Mild Iron Deficiency / Borderline Anemia", "Borderline Cholesterol"],
-    severity: "Mild Concern",
-    recommended_specialist: "General Physician / Internal Medicine",
-    urgency: "Not urgent — Book General Physician within 7 days",
-    lifestyle_advice: [
-      "Engage in 30 minutes of daily moderate walking",
-      "Stay well-hydrated with 2 to 3 liters of water",
-      "Ensure 7-8 hours of sound nighttime sleep",
-    ],
-    diet_advice: [
-      "Increase green leafy vegetables (spinach, methi, drumstick leaves)",
-      "Include citrus fruits rich in Vitamin C with meals to boost iron absorption",
-      "Reduce processed baked goods and saturated fats",
-    ],
-    medicines_mentioned: ["Telmisartan 40mg (Continue as prescribed)"],
-    follow_up_tests: ["Repeat Complete Blood Count (CBC) in 3 months", "Lipid Panel in 6 months"],
-    confidence_score: 0.98,
-    language: "en",
-    saved_to_case_history: true,
-    disclaimer: "This is an AI-assisted plain-language summary for patient understanding. Please consult your physician for official medical diagnosis.",
-  });
+  const [analysisResult, setAnalysisResult] = useState<AIReportAnalysisResult | null>(null);
 
-  // Pre-loaded Demo Scans for Instant Testing
-  const demoReports = [
-    {
-      label: "🩸 Complete Blood Count (CBC)",
-      type: "CBC",
-      text: "PATIENT: Vikram Malhotra, AGE: 38, MALE. Complete Blood Count (CBC): Hemoglobin: 11.2 g/dL (Ref: 12.0-15.5 g/dL - LOW), RBC Count: 4.1 mil/uL (Ref: 4.5-5.9), WBC Total: 6,800 /mcL (Ref: 4,000-11,000 - NORMAL), Platelet Count: 240,000 /mcL (Ref: 150,000-450,000 - NORMAL), Hematocrit (PCV): 34% (Ref: 36-46%). IMPRESSION: Microcytic hypochromic picture suggestive of mild iron deficiency anemia. Renal and metabolic indices preserved.",
-    },
-    {
-      label: "🧪 Kidney & Liver Metabolic Panel",
-      type: "BLOOD_TEST",
-      text: "APOLLO DIAGNOSTICS BIOCHEMISTRY: Serum Creatinine: 0.9 mg/dL (Normal: 0.7-1.3), Blood Urea Nitrogen: 14 mg/dL (Normal: 7-20), eGFR: >90 mL/min/1.73m2 (Optimal). SGOT/AST: 24 U/L (Normal: <40), SGPT/ALT: 28 U/L (Normal: <45), Serum Bilirubin: 0.8 mg/dL (Normal: 0.2-1.2). Fasting Glucose: 98 mg/dL. CONCLUSION: Normal renal filtration and intact hepatic architecture with optimal glycemic control.",
-    },
-    {
-      label: "🧠 Brain MRI Scan with Contrast",
-      type: "MRI",
-      text: "MRI BRAIN (AXIAL T1, T2, FLAIR, DIFFUSION): Ventricles and sulci are normal for age. No acute territorial infarction or intracranial hemorrhage. No focal mass effect or midline shift. Gray-white matter differentiation intact. Minor non-specific white matter punctate foci consistent with benign microvascular changes. Basal cisterns clear. IMPRESSION: Normal brain MRI study with zero acute intracranial abnormalities.",
-    },
-    {
-      label: "🫁 Chest Digital X-Ray (PA View)",
-      type: "XRAY",
-      text: "CHEST RADIOGRAPH (PA VIEW): Lung fields appear clear bilaterally. No evidence of active consolidation, cavitation, or pleural effusion. Cardiothoracic ratio is 0.46 (within standard normal limits <0.50). Hilar contours and vascularity are normal. Bony thorax and bilateral costophrenic angles intact. IMPRESSION: Normal chest radiograph.",
-    },
-    {
-      label: "🩻 Abdominal Multi-Slice CT Scan",
-      type: "CT_SCAN",
-      text: "CONTRAST CT ABDOMEN & PELVIS: Liver demonstrates normal size and homogeneous attenuation with no focal hepatic lesions. Gallbladder, pancreas, spleen, and bilateral kidneys appear normal. No retroperitoneal lymphadenopathy or free fluid. Bowel loops unremarkable. IMPRESSION: Normal study of abdomen and pelvis.",
-    },
-    {
-      label: "💊 Cardiology E-Prescription",
-      type: "PRESCRIPTION",
-      text: "APOLLO HOSPITALS E-PRESCRIPTION: 1. Tab Telmisartan 40mg - 1 Tab OD Morning after breakfast for 30 days. 2. Tab Metformin 500mg SR - 1 Tab BD with meals for 90 days. 3. Tab Paracetamol 650mg - 1 Tab SOS after meals for fever/headache. Advice: Low sodium diet, 30 min daily walking, monitor BP weekly.",
-    },
-    {
-      label: "🏥 Inpatient Discharge Summary",
-      type: "DISCHARGE_SUMMARY",
-      text: "HOSPITAL DISCHARGE SUMMARY: Diagnosis: Acute Viral Upper Respiratory Tract Infection with Mild Bronchospasm. Hospital Course: Admitted for 24 hours observation. IV hydration and nebulization administered. Vitals on discharge: BP 122/80, HR 74 bpm, SpO2 99%. Plan: Oral antibiotics completed. Continue antihypertensive medications. Follow up OPD in 7 days.",
-    },
-  ];
-
-  // Multi-Step Processing Pipeline
-  const runProcessingPipeline = async (rawText: string, docType: string) => {
+  const runProcessingPipeline = async (uploadedFile: File, docType: string) => {
+    if (!user?.id) {
+      toast.error("Please sign in before uploading a report.");
+      return;
+    }
     setIsProcessing(true);
     setImageQualityError(null);
     setProcessingStep(1);
-
-    // Step 1: Uploading
-    await new Promise((r) => setTimeout(r, 400));
-    setProcessingStep(2);
-
-    // Step 2: Extracting Text (OCR)
-    await new Promise((r) => setTimeout(r, 500));
-    setProcessingStep(3);
-
-    // Step 3: Understanding Medical Terms
-    await new Promise((r) => setTimeout(r, 600));
-    setProcessingStep(4);
-
     try {
-      // Step 4: Generating Plain Language AI Summary via Gemini
-      const res = await api.ai.analyzeAndExplainReport({
-        extracted_text: rawText,
+      const timeline = await api.patient.getTimeline();
+      if (!timeline.success || !timeline.data) throw new Error(timeline.message || "Unable to load your visits");
+      const visitEvent = timeline.data.timeline?.find((event: any) => event.event_type === "VISIT");
+      if (!visitEvent?.event_id) throw new Error("A registered visit is required before uploading a report.");
+      setProcessingStep(2);
+      const formData = new FormData();
+      formData.append("file", uploadedFile);
+      formData.append("visit_id", visitEvent.event_id);
+      formData.append("patient_id", user.id);
+      formData.append("title", uploadedFile.name);
+      formData.append("report_type", docType);
+      const uploaded = await api.reports.uploadReport(formData);
+      if (!uploaded.success || !uploaded.data?.id) throw new Error(uploaded.message || "Report upload failed");
+      setProcessingStep(3);
+      const ocr = await api.reports.triggerOCR(uploaded.data.id);
+      if (!ocr.success || !ocr.data?.raw_extracted_text?.trim()) throw new Error(ocr.message || "OCR did not return report text");
+
+      setProcessingStep(4);
+      const explained = await api.ai.analyzeAndExplainReport({
+        medical_report_id: uploaded.data.id,
+        extracted_text: ocr.data.raw_extracted_text,
         document_type: docType,
         language: selectedLanguage,
-        patient_id: user?.id || "569589b7-bcd1-49e7-a886-dd5199c46838",
-        hospital_name: selectedHospital.name,
+        patient_id: user.id,
       });
-
+      if (!explained.success || !explained.data?.saved_to_case_history) throw new Error(explained.message || "Report analysis was not saved");
       setProcessingStep(5);
-      // Step 5: Saving to Case History
-      await new Promise((r) => setTimeout(r, 400));
-
-      if (res.success && res.data) {
-        setAnalysisResult(res.data);
-        toast.success("✨ Medical report converted to plain language & saved to Case History!");
-      }
-    } catch (err) {
-      toast.info("Report analyzed successfully.");
+      setAnalysisResult(explained.data);
+      toast.success("Report uploaded, analyzed, and saved.");
+    } catch (error) {
+      setAnalysisResult(null);
+      toast.error(error instanceof Error ? error.message : "Report processing failed.");
     } finally {
       setIsProcessing(false);
       setProcessingStep(0);
     }
   };
 
-  const handleSelectDemoReport = (demo: typeof demoReports[0]) => {
-    setDocumentType(demo.type);
-    setExtractedText(demo.text);
-    runProcessingPipeline(demo.text, demo.type);
-  };
-
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFile = e.target.files?.[0];
     if (!uploadedFile) return;
 
-    setFile(uploadedFile);
-
-    // Mock OCR text extraction based on file name or generic extraction
-    const mockExtractedText = `SCANNED MEDICAL REPORT (${uploadedFile.name}): Patient Vikram Malhotra, Age 38. Comprehensive Diagnostic Workup. Fasting Glucose 98 mg/dL, Hb 11.2 g/dL (Mild low), Creatinine 0.9 mg/dL, Total Cholesterol 208 mg/dL. Vitals stable. Completed at ${selectedHospital.name}.`;
-    setExtractedText(mockExtractedText);
-    runProcessingPipeline(mockExtractedText, documentType);
+    runProcessingPipeline(uploadedFile, "LAB_BIOCHEMISTRY");
   };
 
   const handleLanguageChange = (langCode: string) => {
     setSelectedLanguage(langCode);
-    if (extractedText) {
-      runProcessingPipeline(extractedText, documentType);
-    }
-  };
-
-  const handleSimulateBlurryUpload = () => {
-    setImageQualityError("Image quality is poor or blurry. Please retake photo with clear lighting.");
-    toast.error("Image quality is poor. Please retake photo.");
   };
 
   // Filter parameters by search query
@@ -370,14 +239,6 @@ export default function MedicalReportIntelligencePage() {
                 Supports PDF, JPG, PNG, JPEG, DOCX • Blood tests, MRI, CT Scans, X-Rays, Prescriptions, Discharge Summaries
               </p>
             </div>
-
-            <button
-              type="button"
-              onClick={handleSimulateBlurryUpload}
-              className="text-[11px] text-slate-400 hover:text-rose-600 transition"
-            >
-              Test Blurry Scan Detection
-            </button>
           </div>
 
           {/* Drag and Drop Zone */}
@@ -416,24 +277,6 @@ export default function MedicalReportIntelligencePage() {
             </div>
           )}
 
-          {/* Quick Demo Scans for Testing */}
-          <div className="space-y-2 pt-2">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-              Or Instant Demo Scans (Click to Test):
-            </span>
-            <div className="flex flex-wrap gap-2">
-              {demoReports.map((demo, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => handleSelectDemoReport(demo)}
-                  className="px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-blue-50 border border-slate-200/90 hover:border-blue-300 text-slate-700 hover:text-[#2563EB] text-xs font-semibold transition cursor-pointer"
-                >
-                  {demo.label}
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
 
         {/* ========================================================= */}
@@ -485,7 +328,7 @@ export default function MedicalReportIntelligencePage() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Official Medical Intelligence Report</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Report analysis</span>
                     <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold border border-emerald-200">
                       ✓ Saved to Case History
                     </span>

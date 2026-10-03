@@ -44,9 +44,13 @@ class ReportService:
         patient = db.query(Patient).filter(Patient.id == patient_id).first()
         if not patient:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found")
+        if visit.patient_id != patient.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Visit does not belong to the selected patient")
 
         content = await file.read()
         file_size = len(content)
+        if file_size == 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded report is empty")
         if file_size > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -57,9 +61,6 @@ class ReportService:
         file_ext = os.path.splitext(file.filename or "")[1] or ".pdf"
         unique_filename = f"{uuid.uuid4()}{file_ext}"
         storage_path = os.path.join(settings.UPLOAD_DIR, unique_filename)
-
-        with open(storage_path, "wb") as f:
-            f.write(content)
 
         report = MedicalReport(
             visit_id=visit_id,
@@ -73,9 +74,17 @@ class ReportService:
             file_sha256_checksum=sha256_hash,
             is_confidential=is_confidential,
         )
-        db.add(report)
-        db.commit()
-        db.refresh(report)
+        try:
+            with open(storage_path, "wb") as f:
+                f.write(content)
+            db.add(report)
+            db.commit()
+            db.refresh(report)
+        except Exception:
+            db.rollback()
+            if os.path.exists(storage_path):
+                os.remove(storage_path)
+            raise
 
         # Audit log
         AuditService.log_event(
@@ -137,9 +146,12 @@ class ReportService:
             ocr.extracted_entities_json = entities
             ocr.processing_duration_ms = duration_ms
 
-        report.ai_summary = summary
-        db.commit()
-        db.refresh(ocr)
+        try:
+            db.commit()
+            db.refresh(ocr)
+        except Exception:
+            db.rollback()
+            raise
 
         AuditService.log_event(
             db=db,
@@ -173,16 +185,24 @@ class ReportService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medical report not found")
 
         ocr = report.ocr_result
-        raw_text = ocr.raw_extracted_text if ocr else report.title
-        entities = ocr.extracted_entities_json if ocr else []
-
-        summary = AIService.generate_clinical_summary(
-            report_text=raw_text or "",
-            entities=entities or [],
-            focus_areas=focus_areas,
+        if not ocr or not (ocr.raw_extracted_text or "").strip():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Run OCR successfully before generating a report summary")
+        summary = AIService.explain_medical_report(
+            extracted_text=ocr.raw_extracted_text,
+            document_type=report.report_type.value,
+            language="en",
         )
-        report.ai_summary = summary
-        db.commit()
+        report.ai_summary = summary.summary_plain_english
+        payload = dict(report.fhir_diagnostic_report_payload or {})
+        payload["ai_explanation"] = summary.model_dump(mode="json")
+        report.fhir_diagnostic_report_payload = payload
+        try:
+            db.commit()
+            db.refresh(report)
+        except Exception:
+            db.rollback()
+            raise
+        summary.saved_to_case_history = True
 
         AuditService.log_event(
             db=db,
@@ -194,4 +214,4 @@ class ReportService:
             description=f"AI Summary regenerated for Medical Report #{report.id}",
         )
 
-        return {"report_id": report.id, "ai_summary": summary}
+        return {"report_id": report.id, "ai_summary": summary.summary_plain_english, "analysis": summary}

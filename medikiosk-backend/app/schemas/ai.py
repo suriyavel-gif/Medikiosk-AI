@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from app.models.models import TriageLevelEnum
@@ -247,8 +248,9 @@ class AICaseSummaryResponse(BaseModel):
 # AI CLINICAL INTAKE TRIAGE REPORT PERSISTENCE
 # -----------------------------------------------------------------------------
 class SaveIntakeReportRequest(BaseModel):
+    # Kept optional for older clients; the server verifies it matches the authenticated patient.
     patient_id: Optional[str] = Field(None, description="Patient UUID")
-    hospital_name: Optional[str] = Field("Apollo Hospitals Chennai", description="Hospital name")
+    hospital_name: Optional[str] = Field(None, description="Hospital name")
     chief_complaint: str
     symptoms: List[str]
     duration: str
@@ -265,21 +267,29 @@ class SaveIntakeReportRequest(BaseModel):
     warning_signs: Optional[List[str]] = None
     follow_up: str
     disclaimer: str = "This is an AI-assisted preliminary assessment and not a confirmed medical diagnosis."
+    triage_level: Optional[TriageLevelEnum] = None
+    triage_reasoning: Optional[str] = None
+    is_emergency: Optional[bool] = None
+    confidence_score: Optional[float] = None
+    medical_summary: Optional[Dict[str, str]] = None
 
 
 class SaveIntakeReportResponse(BaseModel):
     report_id: str
     patient_id: str
     saved_at: str
+    created_at: datetime
     status: str
     message: str
+    report_data: Dict[str, Any]
 
 
 class IntakeReportItem(BaseModel):
     id: str
     patient_id: str
-    created_at: str
-    hospital_name: str
+    created_at: datetime
+    report_data: Dict[str, Any]
+    hospital_name: Optional[str] = None
     chief_complaint: str
     symptoms: List[str]
     duration: str
@@ -292,6 +302,15 @@ class IntakeReportItem(BaseModel):
     warning_signs: List[str]
     follow_up: str
     disclaimer: str
+    medical_history: Optional[List[str]] = None
+    current_medications: Optional[List[str]] = None
+    allergies: Optional[List[str]] = None
+    vitals: Optional[Dict[str, Any]] = None
+    triage_level: Optional[TriageLevelEnum] = None
+    triage_reasoning: Optional[str] = None
+    is_emergency: Optional[bool] = None
+    confidence_score: Optional[float] = None
+    medical_summary: Optional[Dict[str, str]] = None
 
 
 # -----------------------------------------------------------------------------
@@ -332,9 +351,10 @@ class ParameterCard(BaseModel):
 
 class MedicalReportExplainRequest(BaseModel):
     extracted_text: str = Field(..., description="OCR Extracted medical text")
+    medical_report_id: Optional[str] = Field(None, description="Uploaded report record to persist the analysis against")
     document_type: str = Field("BLOOD_TEST", description="BLOOD_TEST | CBC | MRI | CT_SCAN | XRAY | ECG | PRESCRIPTION | DISCHARGE_SUMMARY | OTHER")
     patient_id: Optional[str] = Field(None, description="Patient UUID")
-    hospital_name: Optional[str] = Field("Apollo Hospitals Chennai", description="Hospital name")
+    hospital_name: Optional[str] = Field(None, description="Hospital name")
     language: Optional[str] = Field("en", description="Language code: en, ta, hi, te, ml, kn")
     image_quality: Optional[str] = Field("GOOD", description="GOOD | POOR | BLURRY")
 

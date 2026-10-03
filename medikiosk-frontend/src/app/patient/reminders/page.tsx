@@ -74,97 +74,24 @@ export default function MedicationRemindersPage() {
     },
   ]);
 
-  // Today's Auto-Generated Medication Schedule
-  const [schedules, setSchedules] = useState<MedicationReminderSlot[]>([
-    {
-      id: "med-01",
-      medicine_name: "Telmisartan 40mg",
-      generic_name: "Telmisartan (Antihypertensive ARB)",
-      dosage: "1 Tablet",
-      frequency_label: "Morning",
-      time_display: "08:00 AM",
-      food_instruction: "Take after breakfast with water",
-      prescribed_by: "Dr. Rajesh Sharma, MD (Cardiology)",
-      is_taken: true,
-      is_skipped: false,
-      is_current_due: false,
-      taken_at: "Today at 08:04 AM",
-      color_tag: "emerald",
-    },
-    {
-      id: "med-02",
-      medicine_name: "Metformin 500mg SR",
-      generic_name: "Metformin Sustained Release",
-      dosage: "1 Tablet",
-      frequency_label: "Morning",
-      time_display: "08:00 AM",
-      food_instruction: "Take with breakfast",
-      prescribed_by: "Dr. Ananya Roy, MD (Endocrinology)",
-      is_taken: true,
-      is_skipped: false,
-      is_current_due: false,
-      taken_at: "Today at 08:05 AM",
-      color_tag: "emerald",
-    },
-    {
-      id: "med-03",
-      medicine_name: "Paracetamol 650mg",
-      generic_name: "Paracetamol / Acetaminophen SOS",
-      dosage: "1 Tablet",
-      frequency_label: "Afternoon",
-      time_display: "02:00 PM",
-      food_instruction: "Take after lunch if fever or pain persists",
-      prescribed_by: "Dr. Rajesh Sharma, MD (Cardiology)",
-      is_taken: false,
-      is_skipped: false,
-      is_current_due: true,
-      color_tag: "blue",
-    },
-    {
-      id: "med-04",
-      medicine_name: "Metformin 500mg SR",
-      generic_name: "Metformin Sustained Release",
-      dosage: "1 Tablet",
-      frequency_label: "Night",
-      time_display: "08:00 PM",
-      food_instruction: "Take after dinner",
-      prescribed_by: "Dr. Ananya Roy, MD (Endocrinology)",
-      is_taken: false,
-      is_skipped: false,
-      is_current_due: false,
-      color_tag: "yellow",
-    },
-    {
-      id: "med-05",
-      medicine_name: "Levocetirizine 5mg",
-      generic_name: "Levocetirizine Dihydrochloride",
-      dosage: "1 Tablet",
-      frequency_label: "Night",
-      time_display: "09:30 PM",
-      food_instruction: "Take before bedtime with water",
-      prescribed_by: "Dr. Rajesh Sharma, MD (Cardiology)",
-      is_taken: false,
-      is_skipped: false,
-      is_current_due: false,
-      color_tag: "yellow",
-    },
-    {
-      id: "med-06",
-      medicine_name: "Vitamin D3 60,000 IU",
-      generic_name: "Cholecalciferol Weekly Sachet",
-      dosage: "1 Sachet in Warm Milk",
-      frequency_label: "Weekly",
-      time_display: "Every Sunday at 10:00 AM",
-      food_instruction: "Mix with warm milk after breakfast",
-      prescribed_by: "Dr. Sandeep Nair, MS (Orthopedics)",
-      is_taken: true,
-      is_skipped: false,
-      is_current_due: false,
-      taken_at: "Sunday, Aug 30 at 10:15 AM",
-      color_tag: "emerald",
-    },
-  ]);
+  const [schedules, setSchedules] = useState<MedicationReminderSlot[]>([]);
 
+  useEffect(() => {
+    api.patient.getPrescriptions().then((response) => {
+      if (!response.success || !response.data) throw new Error("Unable to load medication schedule");
+      const slots = response.data.flatMap((rx) => rx.intake_schedules.map((slot) => {
+        const medicine = rx.items.find((item) => item.medicine_name === slot.medicine_name);
+        return {
+          id: slot.id, medicine_name: slot.medicine_name, generic_name: medicine?.generic_name || "",
+          dosage: slot.dosage_amount, frequency_label: new Date(slot.scheduled_intake_timestamp).toLocaleTimeString([], { hour: "2-digit" }).toLowerCase().includes("am") ? "Morning" : "Night",
+          time_display: new Date(slot.scheduled_intake_timestamp).toLocaleString(), food_instruction: medicine?.special_intake_conditions || "",
+          prescribed_by: rx.doctor_name, is_taken: slot.is_taken, is_skipped: false, is_current_due: false,
+          taken_at: slot.actual_taken_timestamp, color_tag: slot.is_taken ? "emerald" : "blue",
+        } as MedicationReminderSlot;
+      }));
+      setSchedules(slots);
+    }).catch((error) => toast.error(error instanceof Error ? error.message : "Unable to load medication schedule"));
+  }, []);
   // Check Browser Notification Permission on mount
   useEffect(() => {
     if (typeof window !== "undefined" && "Notification" in window) {
@@ -194,31 +121,25 @@ export default function MedicationRemindersPage() {
   };
 
   // Mark Dose as Taken
-  const handleMarkTaken = (slotId: string) => {
-    setSchedules((prev) =>
-      prev.map((s) =>
-        s.id === slotId
-          ? { ...s, is_taken: true, is_skipped: false, is_current_due: false, taken_at: "Just now" }
-          : s
-      )
-    );
-    setActiveReminderModal(null);
-    toast.success("✨ Medication dose recorded as Taken!");
+  const handleMarkTaken = async (slotId: string) => {
+    try {
+      const response = await api.prescriptions.logAdherence(slotId, true);
+      if (!response.success) throw new Error("Dose status was not saved");
+      setSchedules((prev) => prev.map((slot) => slot.id === slotId ? { ...slot, is_taken: true, is_skipped: false, is_current_due: false, taken_at: new Date().toLocaleString() } : slot));
+      setActiveReminderModal(null);
+      toast.success("Medication dose recorded.");
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Could not save dose status"); }
   };
 
-  // Mark Dose as Skipped
-  const handleMarkSkipped = (slotId: string, reason: string = "Patient indicated skip") => {
-    setSchedules((prev) =>
-      prev.map((s) =>
-        s.id === slotId
-          ? { ...s, is_taken: false, is_skipped: true, is_current_due: false, skipped_reason: reason }
-          : s
-      )
-    );
-    setActiveReminderModal(null);
-    toast.warning("Medication marked as Skipped. Logged to doctor compliance audit.");
+  const handleMarkSkipped = async (slotId: string, reason: string = "Patient indicated skip") => {
+    try {
+      const response = await api.prescriptions.logAdherence(slotId, false, reason);
+      if (!response.success) throw new Error("Dose status was not saved");
+      setSchedules((prev) => prev.map((slot) => slot.id === slotId ? { ...slot, is_skipped: true, is_current_due: false, skipped_reason: reason } : slot));
+      setActiveReminderModal(null);
+      toast.success("Medication skip status recorded.");
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Could not save dose status"); }
   };
-
   // Snooze Dose for 15 minutes
   const handleSnooze = (slot: MedicationReminderSlot) => {
     setActiveReminderModal(null);
@@ -246,14 +167,9 @@ export default function MedicationRemindersPage() {
     try {
       const res = await api.ai.medicationChat({
         query: q,
-        active_prescriptions: [
-          "Telmisartan 40mg OD (Morning)",
-          "Metformin 500mg SR BD (Morning & Night)",
-          "Paracetamol 650mg SOS",
-          "Levocetirizine 5mg (Night)",
-        ],
-        patient_allergies: ["Penicillin Anaphylaxis"],
-        chronic_conditions: ["Essential Hypertension", "Type 2 Diabetes"],
+        active_prescriptions: schedules.map((slot) => `${slot.medicine_name} ${slot.dosage}`),
+        patient_allergies: [],
+        chronic_conditions: [],
         language: language,
       });
 
@@ -267,22 +183,10 @@ export default function MedicationRemindersPage() {
           },
         ]);
       } else {
-        setChatMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            text: "Take your prescribed medicines with water after food. Never skip or alter doses without consulting Dr. Rajesh Sharma.",
-          },
-        ]);
+        throw new Error("Medication assistant did not return guidance");
       }
-    } catch {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          text: "It is generally recommended to take your blood pressure and diabetes medicines after meals with water. If you miss a dose, take it as soon as remembered unless it is close to your next scheduled time. Never take a double dose.",
-        },
-      ]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Medication assistant request failed");
     } finally {
       setChatLoading(false);
     }

@@ -10,6 +10,8 @@ from app.models.models import (
     ReportTypeEnum,
     UserRoleEnum,
     AuditActionEnum,
+    Visit,
+    Doctor,
 )
 from app.schemas.auth import CurrentUser
 from app.schemas.medical_report import (
@@ -21,8 +23,23 @@ from app.schemas.medical_report import (
 from app.schemas.common import APIResponse
 from app.services.report_service import ReportService
 from app.services.audit_service import AuditService
+from app.services.consent_service import ConsentService
 
 router = APIRouter(prefix="/reports", tags=["Medical Reports & Diagnostic OCR"])
+
+
+def _require_report_access(report: MedicalReport, current_user: CurrentUser, db: Session) -> None:
+    if current_user.role == UserRoleEnum.PATIENT.value:
+        if (current_user.patient_id or current_user.id) == report.patient_id:
+            return
+    elif current_user.role == UserRoleEnum.DOCTOR.value:
+        doctor = db.query(Doctor).filter(Doctor.id == current_user.doctor_id).first() if current_user.doctor_id else db.query(Doctor).filter(Doctor.user_id == current_user.id).first()
+        if doctor and report.visit and doctor.hospital_id == report.visit.hospital_id and ConsentService.check_active_consent(db, report.patient_id, doctor.id):
+            return
+    elif current_user.role in (UserRoleEnum.RECEPTIONIST.value, UserRoleEnum.HOSPITAL_ADMIN.value):
+        if current_user.hospital_id and report.visit and current_user.hospital_id == report.visit.hospital_id:
+            return
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medical report not found")
 
 
 @router.post("/upload", response_model=APIResponse[MedicalReportResponse], status_code=status.HTTP_201_CREATED)
@@ -38,6 +55,16 @@ async def upload_report(
     db: Session = Depends(get_db),
 ):
     """Upload a diagnostic lab report, radiology scan, or historical prescription."""
+    if current_user.role == UserRoleEnum.PATIENT.value:
+        if patient_id != (current_user.patient_id or current_user.id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot upload a report for another patient")
+    elif current_user.role not in (UserRoleEnum.DOCTOR.value, UserRoleEnum.RECEPTIONIST.value, UserRoleEnum.HOSPITAL_ADMIN.value):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Role cannot upload patient reports")
+    visit = db.query(Visit).filter(Visit.id == visit_id, Visit.patient_id == patient_id).first()
+    if not visit:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient visit not found")
+    if current_user.role != UserRoleEnum.PATIENT.value and current_user.hospital_id != visit.hospital_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Visit is outside your hospital")
     client_ip = get_client_ip(request)
     report = await ReportService.upload_medical_report(
         db=db,
@@ -46,7 +73,7 @@ async def upload_report(
         patient_id=patient_id,
         title=title,
         report_type=report_type,
-        uploaded_by_user_id=current_user.id,
+        uploaded_by_user_id=current_user.id if current_user.role != UserRoleEnum.PATIENT.value else None,
         is_confidential=is_confidential,
         client_ip=client_ip,
     )
@@ -67,6 +94,10 @@ def trigger_ocr(
     target_report_id = report_id or (req.medical_report_id if req else None)
     if not target_report_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Medical report ID is required")
+    report = db.query(MedicalReport).filter(MedicalReport.id == target_report_id).first()
+    if not report:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medical report not found")
+    _require_report_access(report, current_user, db)
     ocr_result = ReportService.trigger_ocr(db, report_id=target_report_id, client_ip=client_ip)
     return APIResponse(success=True, message="OCR processing completed and entities extracted", data=ocr_result)
 
@@ -85,6 +116,10 @@ def trigger_ai_summary(
     target_report_id = report_id or (req.medical_report_id if req else None)
     if not target_report_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Medical report ID is required")
+    report = db.query(MedicalReport).filter(MedicalReport.id == target_report_id).first()
+    if not report:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medical report not found")
+    _require_report_access(report, current_user, db)
     focus_areas = req.focus_areas if req else None
     result = ReportService.trigger_ai_summary(
         db, report_id=target_report_id, focus_areas=focus_areas, client_ip=client_ip
@@ -103,6 +138,7 @@ def get_report_details(
     report = db.query(MedicalReport).filter(MedicalReport.id == report_id).first()
     if not report:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+    _require_report_access(report, current_user, db)
     return APIResponse(success=True, message="Report metadata retrieved", data=MedicalReportResponse.model_validate(report))
 
 
@@ -119,7 +155,10 @@ def download_report(
     """
     client_ip = get_client_ip(request)
     report = db.query(MedicalReport).filter(MedicalReport.id == report_id).first()
-    if not report or not os.path.exists(report.file_storage_uri):
+    if not report:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report file not found")
+    _require_report_access(report, current_user, db)
+    if not os.path.exists(report.file_storage_uri):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report file not found on disk")
 
     if current_user.role == UserRoleEnum.DOCTOR.value:

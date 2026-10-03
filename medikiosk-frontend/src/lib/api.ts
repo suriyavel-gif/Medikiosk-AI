@@ -22,6 +22,9 @@ import {
   NotificationItem,
   SimulateNotificationRequest,
   GovernmentDashboardOverviewResponse,
+  AIIntakeReportSaveRequest,
+  AIIntakeReportSaveResponse,
+  AIIntakeReportRecord,
 } from "./types";
 
 
@@ -106,10 +109,41 @@ export const api = {
       apiClient.get<APIResponse<AuditLog[]>>("/patients/doctor-access-logs").then((r) => r.data),
     addMedicalHistory: (data: any) =>
       apiClient.post<APIResponse>("/patients/medical-history", data).then((r) => r.data),
+    getMedicalHistory: () =>
+      apiClient.get<APIResponse<any[]>>("/patients/medical-history").then((r) => r.data),
+  },
+
+  // Patient Appointments
+  appointments: {
+    getBookingOptions: () =>
+      apiClient.get<APIResponse<{
+        hospitals: { id: string; name: string }[];
+        departments: { id: string; hospital_id: string; name: string; specialty_type: string }[];
+        doctors: { id: string; hospital_id: string; department_id: string; name: string; specialty: string }[];
+      }>>("/appointments/options").then((r) => r.data),
+    create: (data: {
+      hospital_id: string;
+      department_id: string;
+      doctor_id: string;
+      scheduled_start_time: string;
+      chief_complaint_summary?: string;
+    }) => apiClient.post<APIResponse<{
+      id: string;
+      appointment_number: string;
+      patient_id: string;
+      hospital_id: string;
+      department_id: string;
+      doctor_id: string;
+      scheduled_start_time: string;
+      scheduled_end_time: string;
+      status: string;
+    }>>("/appointments", data).then((r) => r.data),
   },
 
   // Reception APIs
   reception: {
+    getOptions: () =>
+      apiClient.get<APIResponse<{ hospitals: { id: string; name: string }[]; departments: { id: string; hospital_id: string; name: string }[] }>>("/reception/options").then((r) => r.data),
     searchPatients: (q: string) =>
       apiClient.get<APIResponse<PatientProfile[]>>(`/reception/patients/search?q=${encodeURIComponent(q)}`).then((r) => r.data),
     registerVisit: (data: { patient_id: string; hospital_id: string; department_id: string; doctor_id?: string; chief_complaint?: string; visit_type?: string }) =>
@@ -120,12 +154,16 @@ export const api = {
       apiClient.get<APIResponse<{ total_waiting: number; total_in_room: number; total_completed: number; queue: QueueItemDetail[] }>>(
         `/reception/queue/today?${hospital_id ? `hospital_id=${hospital_id}` : ""}${department_id ? `&department_id=${department_id}` : ""}`
       ).then((r) => r.data),
+    callQueueItem: (queue_id: string) =>
+      apiClient.post<APIResponse<{ queue_id: string; visit_id: string; token_number: string; queue_status: string }>>(`/reception/queue/${queue_id}/call`).then((r) => r.data),
   },
 
   // Doctor Workspace APIs
   doctor: {
     getQueue: () =>
       apiClient.get<APIResponse<DoctorQueuePatientItem[]>>("/doctors/queue/today").then((r) => r.data),
+    callNext: (queue_id: string) =>
+      apiClient.post<APIResponse<{ queue_id: string; visit_id: string; token_number: string; queue_status: string }>>(`/reception/queue/${queue_id}/call`).then((r) => r.data),
     requestAccess: (patient_id: string, purpose?: string, expiry_hours?: number) =>
       apiClient.post<APIResponse<ConsentDetail>>("/doctors/access/request", { patient_id, purpose, expiry_hours }).then((r) => r.data),
     viewPatientTimeline: (patient_id: string) =>
@@ -150,7 +188,7 @@ export const api = {
     requestAccess: (data: { patient_id: string; patient_name?: string; reason: string; duration_text?: string; duration_minutes?: number; doctor_notes?: string; hospital_name?: string; department?: string; doctor_name?: string; doctor_id?: string }) =>
       apiClient.post<{ success: boolean; message: string; request: any }>("/consent/request", data).then((r) => r.data),
     takeAction: (requestId: string, action: "APPROVE" | "REJECT" | "REVOKE", duration_text?: string, duration_minutes?: number) =>
-      apiClient.post<{ success: boolean; message: string; request: any }>("/consent/action", { request_id: requestId, action, duration_text, duration_minutes }).then((r) => r.data),
+      apiClient.post<{ success: boolean; message: string; request: any }>("/consent/action", { request_id: requestId, action, duration_text, duration_minutes: duration_minutes ?? (duration_text ? parseInt(duration_text, 10) * (duration_text.toLowerCase().includes("hour") ? 60 : 1) : undefined) }).then((r) => r.data),
     getLedger: (patientId: string) =>
       apiClient.get<{ success: boolean; count: number; ledger: any[] }>(`/consent/ledger/${patientId}`).then((r) => r.data),
     getActivityLogs: (patientId: string) =>
@@ -236,15 +274,15 @@ export const api = {
       apiClient.post<APIResponse<any>>("/ai/appointment/route", data).then((r) => r.data),
     getCaseSummary: (data: { patient_id: string; language?: string }) =>
       apiClient.post<APIResponse<any>>("/ai/case-summary", data).then((r) => r.data),
-    saveIntakeReport: (data: any) =>
-      apiClient.post<APIResponse<any>>("/ai/intake/save-report", data).then((r) => r.data),
+    saveIntakeReport: (data: AIIntakeReportSaveRequest) =>
+      apiClient.post<APIResponse<AIIntakeReportSaveResponse>>("/ai/intake/save-report", data).then((r) => r.data),
     getIntakeReports: (patientId: string) =>
-      apiClient.get<APIResponse<any[]>>(`/ai/intake/reports/${patientId}`).then((r) => r.data),
+      apiClient.get<APIResponse<AIIntakeReportRecord[]>>(`/ai/intake/reports/${patientId}`).then((r) => r.data),
     getLatestIntakeReport: (patientId: string) =>
-      apiClient.get<APIResponse<any>>(`/ai/intake/latest/${patientId}`).then((r) => r.data),
+      apiClient.get<APIResponse<AIIntakeReportRecord | null>>(`/ai/intake/latest/${patientId}`).then((r) => r.data),
     medicationChat: (data: { query: string; medicine_name?: string; active_prescriptions?: string[]; patient_allergies?: string[]; chronic_conditions?: string[]; language?: string }) =>
       apiClient.post<APIResponse<any>>("/ai/medication/chat", data).then((r) => r.data),
-    analyzeAndExplainReport: (data: { extracted_text: string; document_type: string; language?: string; patient_id?: string; hospital_name?: string; image_quality?: string }) =>
+    analyzeAndExplainReport: (data: { extracted_text: string; document_type: string; language?: string; patient_id?: string; medical_report_id?: string; hospital_name?: string; image_quality?: string }) =>
       apiClient.post<APIResponse<any>>("/ai/reports/analyze-and-explain", data).then((r) => r.data),
     getReportDossier: (patientId: string, query?: string) =>
       apiClient.get<any>(`/ai/reports/dossier/${patientId}`, { params: { query } }).then((r) => r.data),
@@ -260,9 +298,7 @@ export const api = {
       apiClient.put<APIResponse<NotificationItem>>(`/notifications/${notification_id}/read`).then((r) => r.data),
     markAllRead: () =>
       apiClient.put<APIResponse<{ updated_count: number }>>("/notifications/read-all").then((r) => r.data),
-    simulateEvent: (payload: SimulateNotificationRequest) =>
-      apiClient.post<APIResponse<NotificationItem>>("/notifications/simulate", payload).then((r) => r.data),
-    dispatch: (payload: any) =>
+dispatch: (payload: any) =>
       apiClient.post<APIResponse<NotificationItem>>("/notifications/dispatch", payload).then((r) => r.data),
     triggerSos: (payload?: any) =>
       apiClient.post<APIResponse<any>>("/notifications/sos", payload || {}).then((r) => r.data),
@@ -347,5 +383,3 @@ export const api = {
       }).then((r) => r.data),
   },
 };
-
-

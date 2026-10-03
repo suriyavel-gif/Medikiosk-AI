@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import mimetypes
 import re
 import time
 from enum import Enum
@@ -383,10 +384,10 @@ class AIService:
         history_window = messages[-25:] if len(messages) > 25 else messages
         conv_summary = "\n".join([f"{m.role.upper()}: {m.content}" for m in history_window])
         
-        v_bp = (vitals or {}).get("bp", "120/80 mmHg")
-        v_hr = (vitals or {}).get("hr", "76 BPM")
-        v_spo2 = (vitals or {}).get("spo2", "98%")
-        v_temp = (vitals or {}).get("temperature", "98.4 °F")
+        v_bp = (vitals or {}).get("bp") or "Not collected"
+        v_hr = (vitals or {}).get("hr") or "Not collected"
+        v_spo2 = (vitals or {}).get("spo2") or "Not collected"
+        v_temp = (vitals or {}).get("temperature") or "Not collected"
 
         prompt = f"""You are MediKiosk AI, an autonomous AI Triage Nurse.
 Analyze the complete patient clinical intake conversation and IoT vitals.
@@ -423,6 +424,7 @@ RULES & INSTRUCTIONS:
   "otc_medicines": ["Paracetamol 650mg SOS for fever/headache", "Oral Rehydration Salts (ORS) as needed"],
   "warning_signs": ["High fever persisting >3 days", "Difficulty breathing or chest tightness", "Severe dizziness or fainting"],
   "follow_up": "Consult an Outpatient Doctor if symptoms persist beyond 48 hours.",
+  "confidence_score": 0.0,
   "disclaimer": "This is an AI-assisted preliminary assessment and not a confirmed medical diagnosis."
 }}
 """
@@ -441,9 +443,12 @@ RULES & INSTRUCTIONS:
         try:
             future = _executor.submit(_call_gemini)
             data = future.result(timeout=CALL_TIMEOUT_SECONDS)
-            risk_val = data.get("risk", "MEDIUM").upper()
+            required = ("risk", "chief_complaint", "symptoms", "duration", "possible_severity", "recommended_department", "preliminary_assessment", "recommended_action", "confidence_score")
+            if any(key not in data or data[key] is None for key in required):
+                raise ValueError("AI intake response is missing required clinical fields")
+            risk_val = str(data["risk"]).upper()
             if risk_val not in ["LOW", "MEDIUM", "HIGH", "CRITICAL"]:
-                risk_val = "MEDIUM"
+                raise ValueError("AI intake response returned an invalid risk level")
 
             # Map to ESI TriageLevelEnum
             triage_map = {
@@ -455,41 +460,26 @@ RULES & INSTRUCTIONS:
             triage_level = triage_map.get(risk_val, TriageLevelEnum.ESI_3_URGENT)
 
             return IntakeSynthesizeResponse(
-                chief_complaint=data.get("chief_complaint", "Clinical symptom assessment"),
-                symptoms=data.get("symptoms", ["Upper respiratory symptoms"]),
-                duration=data.get("duration", "2 days"),
-                possible_severity=data.get("possible_severity", "Moderate"),
-                suggested_department=data.get("recommended_department", "General Medicine"),
+                chief_complaint=data["chief_complaint"],
+                symptoms=data["symptoms"],
+                duration=data["duration"],
+                possible_severity=data["possible_severity"],
+                suggested_department=data["recommended_department"],
                 triage_level=triage_level,
-                triage_reasoning=data.get("preliminary_assessment", "Triage assessment completed."),
+                triage_reasoning=data["preliminary_assessment"],
                 is_emergency=(risk_val == "CRITICAL"),
-                confidence_score=0.96,
+                confidence_score=float(data["confidence_score"]),
                 medical_summary={
                     "subjective": conv_summary[:400],
                     "objective": f"Vitals: BP {v_bp}, HR {v_hr}, SpO2 {v_spo2}, Temp {v_temp}",
-                    "assessment": data.get("preliminary_assessment", "Preliminary clinical assessment"),
-                    "plan": data.get("recommended_action", "Follow up with physician"),
+                    "assessment": data["preliminary_assessment"],
+                    "plan": data["recommended_action"],
                 },
             )
         except Exception as e:
-            logger.warning(f"[AI Triage Nurse] Gemini fallback: {e}")
-            return IntakeSynthesizeResponse(
-                chief_complaint="Upper respiratory tract infection symptoms",
-                symptoms=["Fever", "Body ache", "Sore throat"],
-                duration="2 days",
-                possible_severity="Moderate",
-                suggested_department="General Medicine",
-                triage_level=TriageLevelEnum.ESI_3_URGENT,
-                triage_reasoning="Hemodynamically stable. Outpatient consultation recommended.",
-                is_emergency=False,
-                confidence_score=0.92,
-                medical_summary={
-                    "subjective": conv_summary[:300] or "Patient presents with symptoms.",
-                    "objective": f"BP {v_bp}, HR {v_hr}, SpO2 {v_spo2}, Temp {v_temp}",
-                    "assessment": "Acute viral upper respiratory presentation with stable vitals.",
-                    "plan": "Consult General Medicine physician within 24-48 hours. Supportive hydration.",
-                },
-            )
+            logger.warning(f"[AI Triage Nurse] Intake synthesis failed: {e}")
+            raise RuntimeError("AI intake synthesis is temporarily unavailable.") from e
+
     # -------------------------------------------------------------------------
     # Patient Health Assistant (Conversational EHR Assistant)
     # -------------------------------------------------------------------------
@@ -548,27 +538,49 @@ RULES & INSTRUCTIONS:
                     disclaimer=str(parsed.get("disclaimer", "Consult your physician for clinical advice.")),
                 )
 
-        q_lower = query.lower()
-        if "medicine" in q_lower or "dose" in q_lower or "prescription" in q_lower:
-            ans = f"Hello {patient_name}. According to your hospital EHR, you are currently prescribed medications including Telmisartan 40mg (Morning after breakfast) and Metformin 500mg (Morning and Night with meals)."
-            topics = ["Active Prescriptions", "Medication Adherence"]
-        elif "doctor" in q_lower or "visit" in q_lower:
-            ans = f"Your latest consultation is recorded at Apollo Hospital Main Campus with Dr. Rajesh Sharma in Cardiology OPD."
-            topics = ["Hospital Visits", "OPD Queue"]
-        else:
-            ans = f"Hello {patient_name}, I am here to help you manage your health records, medicine timings, and hospital appointments. How else can I assist you?"
-            topics = ["General Health Support"]
-
-        return PatientAssistantChatResponse(
-            answer=ans,
-            referenced_topics=topics,
-            suggested_followups=["What are my medicine timings?", "View my recent doctor visit"],
-            disclaimer="Consult your attending physician for specific clinical adjustments.",
-        )
-
+        logger.warning("[Patient Health Assistant] Synthesis failed: %s", result.get("error"))
+        raise RuntimeError("Patient health assistant is temporarily unavailable")
     # -------------------------------------------------------------------------
     # OCR Document Analysis
     # -------------------------------------------------------------------------
+    @classmethod
+    def process_ocr_and_extract_entities(cls, file_path: str, report_type: str):
+        """Extract text and findings from the uploaded document; fail instead of inventing results."""
+        if not settings.GEMINI_API_KEY:
+            raise RuntimeError("AI document processing is unavailable because no API key is configured.")
+        try:
+            with open(file_path, "rb") as source:
+                document_bytes = source.read()
+            if not document_bytes:
+                raise ValueError("Uploaded report is empty")
+            mime_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+            prompt = (
+                "Extract only information visible in this medical document. Return strict JSON with keys "
+                "raw_extracted_text, summary, important_findings, detected_diseases, detected_medicines, "
+                "recommendations, confidence_score. Each important finding needs entity, value, unit, flag, "
+                "reference_range, and loinc where visible. Do not infer missing measurements; use an empty "
+                "string or null for fields absent from the document. Document type: " + report_type
+            )
+            client = cls.get_client()
+            if client is None:
+                raise RuntimeError("AI document processor could not be initialized")
+            response = client.models.generate_content(
+                model=PRIMARY_MODEL,
+                contents=[prompt, types.Part.from_bytes(data=document_bytes, mime_type=mime_type)],
+                config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0),
+            )
+            parsed = clean_and_parse_json(response.text if response else "")
+            required = ("raw_extracted_text", "summary", "important_findings", "confidence_score")
+            if not parsed or any(key not in parsed for key in required) or not str(parsed["raw_extracted_text"]).strip():
+                raise ValueError("OCR response did not contain extracted document text and findings")
+            confidence = float(parsed["confidence_score"])
+            if not 0 <= confidence <= 1:
+                raise ValueError("OCR confidence score is outside the expected range")
+            return str(parsed["raw_extracted_text"]), parsed["important_findings"], str(parsed["summary"]), confidence
+        except Exception as exc:
+            logger.warning("[Medical Report OCR] %s", exc)
+            raise RuntimeError("Medical report OCR is temporarily unavailable.") from exc
+
     @classmethod
     def analyze_ocr_document(
         cls,
@@ -598,6 +610,9 @@ RULES & INSTRUCTIONS:
         if result["success"]:
             parsed = clean_and_parse_json(result["response"])
             if parsed:
+                required = ("summary", "document_type", "detected_diseases", "detected_medicines", "important_findings", "recommendations", "confidence_score")
+                if any(key not in parsed for key in required):
+                    raise RuntimeError("OCR analysis response is missing required fields")
                 findings = [
                     DetectedEntity(
                         entity=str(f.get("entity", "Test")),
@@ -610,33 +625,17 @@ RULES & INSTRUCTIONS:
                     for f in parsed.get("important_findings", [])
                 ]
                 return OCRAnalysisResponse(
-                    summary=parsed.get("summary", "Complete blood count within standard physiological limits."),
-                    document_type=parsed.get("document_type", document_type),
-                    detected_diseases=parsed.get("detected_diseases", []),
-                    detected_medicines=parsed.get("detected_medicines", []),
+                    summary=parsed["summary"],
+                    document_type=parsed["document_type"],
+                    detected_diseases=parsed["detected_diseases"],
+                    detected_medicines=parsed["detected_medicines"],
                     important_findings=findings,
-                    recommendations=parsed.get("recommendations", ["Routine review in 6 months"]),
-                    confidence_score=float(parsed.get("confidence_score", 0.95)),
+                    recommendations=parsed["recommendations"],
+                    confidence_score=float(parsed["confidence_score"]),
                 )
 
-        findings = [
-            DetectedEntity(entity="Hemoglobin (Hb)", value="14.2", unit="g/dL", flag="NORMAL", reference_range="13.0 - 17.0", loinc="718-7"),
-            DetectedEntity(entity="Total Leukocyte Count (WBC)", value="6,800", unit="/mcL", flag="NORMAL", reference_range="4,000 - 11,000", loinc="6690-2"),
-            DetectedEntity(entity="Platelet Count", value="240,000", unit="/mcL", flag="NORMAL", reference_range="150,000 - 450,000", loinc="777-3"),
-            DetectedEntity(entity="Fasting Blood Glucose", value="108", unit="mg/dL", flag="NORMAL", reference_range="70 - 110", loinc="1558-6"),
-        ]
+        raise RuntimeError(result.get("error") or "OCR analysis did not return a valid report.")
 
-        return OCRAnalysisResponse(
-            summary="Complete Blood Count (CBC) and Metabolic panel within standard physiological limits.",
-            document_type=document_type,
-            detected_diseases=[],
-            detected_medicines=[],
-            important_findings=findings,
-            recommendations=["Routine wellness review in 6 months", "Maintain balanced hydration"],
-            confidence_score=0.94,
-        )
-
-    # -------------------------------------------------------------------------
     # Doctor AI Copilot (15-Sec Longitudinal History Synthesis)
     # -------------------------------------------------------------------------
     @classmethod
@@ -806,44 +805,23 @@ RULES & INSTRUCTIONS:
         prompt = f"""You are MediKiosk AI Clinical Triage & Appointment Router.
 Evaluate the patient's symptoms and match them to the optimal healthcare facility, department, and physician.
 
-HOSPITAL DIRECTORY & SPECIALISTS:
-1. Apollo Hospitals Chennai:
-   - Cardiology: Dr. Rajesh Sharma, MD (DM Cardiology) [Wait: 15 Mins, Distance: 2.4 km]
-   - Neurology: Dr. Anita Desai, MD (DM Neuro) [Wait: 20 Mins, Distance: 2.4 km]
-   - Orthopedics: Dr. Sandeep Nair, MS (Ortho) [Wait: 25 Mins, Distance: 2.4 km]
-2. Government General Hospital:
-   - General Medicine: Dr. Priya Raman, MD [Wait: 35 Mins, Distance: 4.1 km]
-   - Emergency & Trauma: Dr. Arun Kumar, MS (Surgery) [Wait: 5 Mins, Distance: 4.1 km]
-3. AIIMS Delhi:
-   - Pulmonology: Dr. Sanjay Gupta, MD [Wait: 30 Mins, Distance: 12.0 km]
-   - Endocrinology: Dr. Sunita Mehra, MD [Wait: 20 Mins, Distance: 12.0 km]
-4. CMC Vellore:
-   - Gastroenterology: Dr. Jacob Varghese, MD [Wait: 40 Mins, Distance: 18.5 km]
-5. Kauvery Hospital:
-   - Nephrology: Dr. K. Venkataraman, MD [Wait: 15 Mins, Distance: 3.8 km]
+SERVICE DIRECTORY: No live hospital, physician availability, distance, or appointment slot directory is connected to this service.
 
 PATIENT INPUT:
 Symptoms: "{symptoms}"
 Explicitly Selected Hospital: "{selected_hospital or 'NONE (Please Recommend Best Hospital)'}"
 Preferred Doctor: "{preferred_doctor or 'NONE'}"
-User Location: "{user_location}"
+User Location: "{user_location or "Not provided"}"
 
 RULES:
-1. If "Explicitly Selected Hospital" is provided (not NONE), YOU MUST KEEP THAT EXACT HOSPITAL. Do not override hospital. Only match Department, Doctor, Priority, and Slot within that hospital.
-2. If "Explicitly Selected Hospital" is NONE, select the most appropriate hospital based on proximity, wait time, and department specialty.
-3. Determine Triage Priority: "HIGH" (for cardiac, neurological, respiratory distress, acute trauma), "MEDIUM" (for infection, fever, moderate pain), or "LOW" (for routine follow-up, chronic refills).
-4. Provide Clinical Rationale in {target_lang}.
-5. Return strictly a JSON object:
+1. No live hospital, physician, availability, distance, wait, or slot directory was supplied. Do not invent any of those.
+2. Leave hospital, department, doctor, estimated_wait, and distance empty. Return recommended_slots as an empty array.
+3. This is a non-binding symptom routing suggestion and does not book an appointment.
+4. Classify urgency only from the symptoms supplied; do not diagnose.
+5. Provide a concise rationale in {target_lang}.
+6. Return strictly a JSON object:
 {{
-  "hospital": "Hospital Name",
-  "department": "Department Name",
-  "doctor": "Doctor Name",
-  "priority": "HIGH" | "MEDIUM" | "LOW",
-  "estimated_wait": "e.g. 15 Mins",
-  "distance": "e.g. 2.4 km",
-  "reason": "Clear clinical justification in {target_lang}",
-  "confidence": 95,
-  "recommended_slots": ["10:30 AM", "11:00 AM", "02:30 PM", "04:00 PM"]
+  "hospital": "", "department": "", "doctor": "", "priority": "LOW", "estimated_wait": "", "distance": "", "reason": "", "confidence": 0, "recommended_slots": []
 }}
 """
         def _call_gemini():
@@ -861,32 +839,13 @@ RULES:
         try:
             future = _executor.submit(_call_gemini)
             data = future.result(timeout=CALL_TIMEOUT_SECONDS)
-            return AIAppointmentRouteResponse(
-                hospital=data.get("hospital") or (selected_hospital or "Apollo Hospitals Chennai"),
-                department=data.get("department", "Cardiology OPD"),
-                doctor=data.get("doctor", "Dr. Rajesh Sharma, MD"),
-                priority=data.get("priority", "HIGH"),
-                estimated_wait=data.get("estimated_wait", "15 Mins"),
-                distance=data.get("distance", "2.4 km"),
-                reason=data.get("reason", "Symptoms indicate specialized clinical review required."),
-                confidence=int(data.get("confidence", 94)),
-                recommended_slots=data.get("recommended_slots", ["10:30 AM", "11:00 AM", "02:30 PM"]),
-            )
+            required = {"hospital", "department", "doctor", "priority", "estimated_wait", "distance", "reason", "confidence", "recommended_slots"}
+            if not required.issubset(data) or not isinstance(data["recommended_slots"], list):
+                raise ValueError("AI returned an incomplete routing recommendation")
+            return AIAppointmentRouteResponse(**data)
         except Exception as e:
-            logger.warning(f"[AI Routing] Gemini fallback: {e}")
-            hosp = selected_hospital or "Apollo Hospitals Chennai"
-            return AIAppointmentRouteResponse(
-                hospital=hosp,
-                department="Cardiology OPD",
-                doctor="Dr. Rajesh Sharma, MD",
-                priority="HIGH" if "chest" in symptoms.lower() or "breath" in symptoms.lower() else "MEDIUM",
-                estimated_wait="15 Mins",
-                distance="2.4 km",
-                reason=f"Clinical triage matched symptoms to {hosp} Cardiology department.",
-                confidence=92,
-                recommended_slots=["10:30 AM", "11:00 AM", "02:30 PM", "04:00 PM"],
-            )
-
+            logger.warning(f"[AI Routing] Synthesis failed: {e}")
+            raise RuntimeError("AI appointment routing failed") from e
     # -----------------------------------------------------------------------------
     # 9. AI CASE SUMMARY
     # -----------------------------------------------------------------------------
@@ -934,17 +893,18 @@ Allergies: {', '.join(allergies) if allergies else 'None known'}
 Recent Lab Reports: {', '.join(lab_reports) if lab_reports else 'None'}
 
 RULES:
-1. Identify all critical CDSS allergy red flags (e.g. Penicillin anaphylaxis).
-2. Recommend next laboratory workups and differential diagnoses.
-3. Write all clinical notes and diagnosis suggestions in {target_lang}.
+1. Use only information provided from the patient's profile and records.
+2. Do not infer missing diagnoses, allergies, medications, measurements, test results, or recommendations.
+3. If source records are empty, state that and keep arrays empty; absence is not a negative finding.
+4. Write clinical notes in {target_lang}.
 4. Return strictly a JSON object:
 {{
-  "major_diseases": ["Essential Hypertension", "Type 2 Diabetes Mellitus"],
-  "current_complaint": "{chief_complaint}",
-  "possible_diagnosis": "Acute viral upper respiratory tract infection with background hypertension",
-  "recommended_tests": ["12-Lead Resting ECG", "Complete Blood Count (CBC)", "Serum Creatinine"],
-  "risk_level": "MODERATE (ESI-3)",
-  "clinical_notes": "Patient presents with fever and URI symptoms. Critical Penicillin allergy noted - strictly avoid beta-lactam antibiotics. Recommend Macrolide or Fluoroquinolone if bacterial etiology confirmed."
+  "major_diseases": [],
+  "current_complaint": "",
+  "possible_diagnosis": "",
+  "recommended_tests": [],
+  "risk_level": "",
+  "clinical_notes": ""
 }}
 """
         def _call_gemini():
@@ -962,6 +922,9 @@ RULES:
         try:
             future = _executor.submit(_call_gemini)
             data = future.result(timeout=CALL_SECONDS) if 'CALL_SECONDS' in dir() else future.result(timeout=15)
+            required = {"major_diseases", "current_complaint", "possible_diagnosis", "recommended_tests", "risk_level", "clinical_notes"}
+            if not required.issubset(data) or not isinstance(data["major_diseases"], list) or not isinstance(data["recommended_tests"], list):
+                raise ValueError("AI returned an incomplete case summary")
             return AICaseSummaryResponse(
                 patient_name=patient_name,
                 age=age,
@@ -969,37 +932,20 @@ RULES:
                 blood_group=blood_group,
                 mrn=mrn,
                 national_health_id=national_health_id,
-                major_diseases=data.get("major_diseases", diagnoses or ["Essential Hypertension", "Type 2 Diabetes"]),
-                current_complaint=data.get("current_complaint", chief_complaint),
+                major_diseases=data["major_diseases"],
+                current_complaint=data["current_complaint"],
                 vitals_summary=vitals,
-                current_medicines=medications or ["Telmisartan 40mg OD", "Metformin 500mg BD"],
-                allergies=allergies or ["Penicillin Anaphylaxis"],
-                recent_lab_findings=lab_reports or ["ECG: Normal Sinus Rhythm", "HbA1c: 6.8% (Fair Glycemic Control)"],
-                possible_diagnosis=data.get("possible_diagnosis", "Acute Viral URI with Controlled Hypertension"),
-                recommended_tests=data.get("recommended_tests", ["12-Lead ECG", "Complete Blood Count", "Serum Electrolytes"]),
-                risk_level=data.get("risk_level", "MODERATE (ESI-3)"),
-                clinical_notes=data.get("clinical_notes", "Patient vitals stable. Strict Penicillin contraindication. Continue baseline antihypertensives."),
+                current_medicines=medications,
+                allergies=allergies,
+                recent_lab_findings=lab_reports,
+                possible_diagnosis=data["possible_diagnosis"],
+                recommended_tests=data["recommended_tests"],
+                risk_level=data["risk_level"],
+                clinical_notes=data["clinical_notes"],
             )
         except Exception as e:
-            logger.warning(f"[AI Summary] Gemini fallback: {e}")
-            return AICaseSummaryResponse(
-                patient_name=patient_name,
-                age=age,
-                gender=gender,
-                blood_group=blood_group,
-                mrn=mrn,
-                national_health_id=national_health_id,
-                major_diseases=diagnoses or ["Essential Hypertension", "Type 2 Diabetes"],
-                current_complaint=chief_complaint,
-                vitals_summary=vitals,
-                current_medicines=medications or ["Telmisartan 40mg OD", "Metformin 500mg BD"],
-                allergies=allergies or ["Penicillin Anaphylaxis"],
-                recent_lab_findings=lab_reports or ["ECG: Normal Sinus Rhythm", "HbA1c: 6.8%"],
-                possible_diagnosis="Acute Viral URI with Controlled Hypertension",
-                recommended_tests=["12-Lead ECG", "Complete Blood Count", "Serum Electrolytes"],
-                risk_level="MODERATE (ESI-3)",
-                clinical_notes="Patient vitals stable. Strict Penicillin allergy documented in CDSS ledger.",
-            )
+            logger.warning(f"[AI Summary] Gemini synthesis failed: {e}")
+            raise RuntimeError("AI case summary synthesis failed") from e
 
     # -------------------------------------------------------------------------
     # AI Medication Assistant (Patient Prescription Q&A)
@@ -1019,9 +965,9 @@ RULES:
         Answers food instructions, missed-dose guidelines, interactions, and side effects.
         Strict safety: Never advises stopping prescription medicines; always advises consulting doctor.
         """
-        prescriptions_str = ", ".join(active_prescriptions or ["Telmisartan 40mg OD", "Metformin 500mg SR BD", "Paracetamol 650mg SOS"])
-        allergies_str = ", ".join(patient_allergies or ["Penicillin Anaphylaxis"])
-        chronic_str = ", ".join(chronic_conditions or ["Essential Hypertension", "Type 2 Diabetes"])
+        prescriptions_str = ", ".join(active_prescriptions or []) or "No prescription context was supplied"
+        allergies_str = ", ".join(patient_allergies or []) or "No allergy context was supplied"
+        chronic_str = ", ".join(chronic_conditions or []) or "No condition context was supplied"
 
         prompt = f"""You are MediKiosk AI Clinical Pharmacist and Medication Adherence Assistant.
 A patient is asking a question about their prescribed medicines.
@@ -1042,13 +988,14 @@ SAFETY & BEHAVIOR RULES:
 3. If asked about missed doses: explain the standard rule (take as soon as remembered unless it is almost time for next dose; never double dose).
 4. If asked about side effects: list common minor side effects and red-flag symptoms.
 5. STRICT RULE: NEVER recommend stopping or adjusting prescription doses without doctor guidance.
-6. Return valid JSON matching this schema:
+6. Do not infer the patient's medication, allergy, or diagnosis history from missing context. Do not provide drug-specific dosing when the medicine is not supplied.
+7. Return valid JSON matching this schema:
 {{
-  "reply": "Clear, direct, and reassuring answer to the patient's question in {language}",
-  "key_advice": ["Key point 1", "Key point 2"],
-  "food_instructions": "Take after meals with a full glass of water",
-  "missed_dose_guidance": "Take as soon as remembered, but skip if close to next scheduled dose. Do not double.",
-  "warning_signs": ["Severe skin rash", "Facial swelling", "Extreme dizziness"],
+  "reply": "",
+  "key_advice": [],
+  "food_instructions": "",
+  "missed_dose_guidance": "",
+  "warning_signs": [],
   "consult_doctor_recommended": false,
   "disclaimer": "Always follow your prescribing doctor's exact instructions. Never stop prescription medicines without consulting your physician."
 }}
@@ -1068,26 +1015,21 @@ SAFETY & BEHAVIOR RULES:
         try:
             future = _executor.submit(_call_gemini)
             data = future.result(timeout=CALL_TIMEOUT_SECONDS)
+            required = ("reply", "key_advice", "food_instructions", "missed_dose_guidance", "warning_signs", "consult_doctor_recommended")
+            if any(key not in data or data[key] is None for key in required):
+                raise ValueError("AI medication guidance is incomplete")
             return AIMedicationChatResponse(
-                reply=data.get("reply", "Take your medications as prescribed after meals with plenty of water."),
-                key_advice=data.get("key_advice", ["Take with water after meals", "Do not double dose if missed"]),
-                food_instructions=data.get("food_instructions", "Take after food with water"),
-                missed_dose_guidance=data.get("missed_dose_guidance", "Take when remembered unless close to next scheduled dose."),
-                warning_signs=data.get("warning_signs", ["Allergic rash", "Shortness of breath"]),
+                reply=data["reply"],
+                key_advice=data["key_advice"],
+                food_instructions=data["food_instructions"],
+                missed_dose_guidance=data["missed_dose_guidance"],
+                warning_signs=data["warning_signs"],
                 consult_doctor_recommended=bool(data.get("consult_doctor_recommended", False)),
                 disclaimer="Always follow your prescribing doctor's exact instructions. Never stop prescription medicines without consulting your physician.",
             )
         except Exception as e:
-            logger.warning(f"[AI Medication Chat Fallback] {e}")
-            return AIMedicationChatResponse(
-                reply="For best absorption and to prevent stomach irritation, it is recommended to take your prescribed medications with a full glass of water after food.",
-                key_advice=["Take after meals", "Stay well hydrated", "Maintain regular timing"],
-                food_instructions="Take after food with water",
-                missed_dose_guidance="If you miss a dose, take it as soon as you remember. If it is close to your next scheduled dose, skip the missed one. Never take a double dose.",
-                warning_signs=["Severe allergic rash", "Dizziness or faintness"],
-                consult_doctor_recommended=False,
-                disclaimer="Always follow your prescribing doctor's exact instructions. Never stop prescription medicines without consulting your physician.",
-            )
+            logger.warning(f"[AI Medication Chat] Synthesis failed: {e}")
+            raise RuntimeError("AI medication guidance is temporarily unavailable") from e
 
     # -------------------------------------------------------------------------
     # AI Medical Report Intelligence & Plain Language Explainer
@@ -1099,7 +1041,7 @@ SAFETY & BEHAVIOR RULES:
         document_type: str = "BLOOD_TEST",
         language: str = "en",
         patient_id: Optional[str] = None,
-        hospital_name: Optional[str] = "Apollo Hospitals Chennai",
+        hospital_name: Optional[str] = None,
     ) -> MedicalReportExplainResponse:
         """
         Converts complex lab, imaging, and diagnostic reports into understandable plain language.
@@ -1116,92 +1058,21 @@ SAFETY & BEHAVIOR RULES:
         }
         target_lang = lang_names.get(language, "English")
 
-        prompt = f"""You are an experienced, empathetic Chief Physician at {hospital_name}.
-Convert this medical report into clear, understandable {target_lang} for a patient with no medical background.
+        prompt = f"""Explain only the findings explicitly present in this uploaded medical report in {target_lang}.
 
-REPORT TYPE: {document_type}
-EXTRACTED REPORT TEXT:
+Report type: {document_type}
+Extracted report text:
 {extracted_text}
 
-INSTRUCTIONS:
-1. Explain:
-   - What test was performed and why it was done.
-   - Overall health status (NORMAL | MILD_CONCERN | CRITICAL).
-   - Plain-language explanation of what the findings mean for the patient's daily life.
-   - For every key parameter/biomarker: provide the measured value, unit, reference range, status (NORMAL | BORDERLINE | CRITICAL | LOW | HIGH), plain English "meaning" (e.g. 'Your blood carries slightly less oxygen than normal'), and actionable "recommendation" (e.g. 'Eat iron-rich foods like spinach and beans').
-   - Organ System breakdown (Kidney Function, Liver Function, Heart Markers, Blood Counts).
-   - Recommended specialist & urgency (e.g. 'Not urgent - Book General Physician within 7 days').
-   - Practical lifestyle advice & diet advice.
-   - Medicines mentioned & follow-up tests.
-2. Return strictly valid JSON matching this schema:
-{{
-  "report_title": "Comprehensive Blood & Metabolic Report",
-  "test_type": "{document_type}",
-  "test_purpose": "To evaluate blood oxygen capacity, blood sugar, kidney function, and liver health.",
-  "overall_status": "MILD_CONCERN",
-  "status_badge": "Mild Concern",
-  "summary_plain_english": "Your test results show that your kidney, liver, and blood sugar levels are healthy and normal. However, your hemoglobin is slightly lower than ideal, which indicates mild anemia. Increasing iron in your diet will help restore your energy.",
-  "parameters": [
-    {{
-      "name": "Hemoglobin (Hb)",
-      "value": "11.2",
-      "unit": "g/dL",
-      "reference_range": "12.0 - 15.5",
-      "status": "BORDERLINE",
-      "meaning": "Your blood has slightly less hemoglobin than normal, meaning your red blood cells carry slightly less oxygen.",
-      "recommendation": "Increase iron-rich foods such as spinach, lentils, beetroot, and pomegranate. Consult physician if fatigue persists.",
-      "category": "Blood Counts"
-    }},
-    {{
-      "name": "Serum Creatinine",
-      "value": "0.9",
-      "unit": "mg/dL",
-      "reference_range": "0.7 - 1.3",
-      "status": "NORMAL",
-      "meaning": "Your kidney filtration is functioning excellently.",
-      "recommendation": "Continue drinking 2 to 3 liters of water daily to maintain optimal kidney hydration.",
-      "category": "Kidney Function"
-    }},
-    {{
-      "name": "Fasting Blood Sugar",
-      "value": "98",
-      "unit": "mg/dL",
-      "reference_range": "70 - 100",
-      "status": "NORMAL",
-      "meaning": "Your resting blood glucose is within the optimal healthy range.",
-      "recommendation": "Maintain your balanced meal schedule and regular daily walking.",
-      "category": "Metabolic Health"
-    }},
-    {{
-      "name": "Total Cholesterol",
-      "value": "208",
-      "unit": "mg/dL",
-      "reference_range": "< 200",
-      "status": "BORDERLINE",
-      "meaning": "Slightly elevated circulating lipids.",
-      "recommendation": "Incorporate fiber-rich oats, nuts, and minimize deep-fried food intake.",
-      "category": "Lipid Profile"
-    }}
-  ],
-  "organ_system_status": {{
-    "Kidney Function": "Normal",
-    "Liver Function": "Normal",
-    "Heart Markers": "Normal",
-    "Blood & Oxygen": "Mild Concern"
-  }},
-  "possible_health_concerns": ["Mild Iron Deficiency / Borderline Anemia", "Borderline Cholesterol"],
-  "severity": "Mild Concern",
-  "recommended_specialist": "General Physician / Internal Medicine",
-  "urgency": "Not urgent - Book General Physician within 7 days",
-  "lifestyle_advice": ["Engage in 30 minutes of daily moderate walking", "Stay well-hydrated with 2-3 liters of water", "Ensure 7-8 hours of sound sleep"],
-  "diet_advice": ["Increase green leafy vegetables (spinach, methi)", "Include citrus fruits rich in Vitamin C to boost iron absorption", "Reduce processed snacks"],
-  "medicines_mentioned": ["Telmisartan 40mg", "Metformin 500mg"],
-  "follow_up_tests": ["Repeat Complete Blood Count (CBC) in 3 months", "Lipid Panel in 6 months"],
-  "confidence_score": 0.98,
-  "language": "{language}",
-  "saved_to_case_history": true,
-  "disclaimer": "This is an AI-generated medical summary for patient understanding. Please consult your physician for official diagnosis and treatment."
-}}
+Rules:
+- Do not invent measurements, ranges, diagnoses, medications, reference values, or follow-up tests.
+- Do not infer a normal result from a value that is absent.
+- For parameters, include only values and ranges visible in the source text. If absent, omit the parameter.
+- Keep the explanation educational and direct the patient to their clinician for diagnosis or treatment decisions.
+- If the extracted text is unreadable or contains no clinical findings, state that the report could not be interpreted and do not fill the missing fields with guesses.
+- Return one JSON object with keys report_title, test_type, test_purpose, overall_status, status_badge, summary_plain_english, parameters, organ_system_status, possible_health_concerns, severity, recommended_specialist, urgency, lifestyle_advice, diet_advice, medicines_mentioned, follow_up_tests, confidence_score, disclaimer.
+- Use empty strings, empty arrays, or empty objects for information not established by the source. Set confidence_score to an evidence-based number from 0 to 1.
+- Each parameter object must have name, value, unit, reference_range, status, meaning, recommendation, category. Use only source-supported details.
 """
         def _call_gemini():
             client = genai.Client(api_key=settings.GEMINI_API_KEY)
@@ -1219,94 +1090,45 @@ INSTRUCTIONS:
             future = _executor.submit(_call_gemini)
             data = future.result(timeout=CALL_TIMEOUT_SECONDS)
             
-            raw_params = data.get("parameters", [])
+            required = ("report_title", "test_purpose", "overall_status", "status_badge", "summary_plain_english", "parameters", "organ_system_status", "possible_health_concerns", "severity", "recommended_specialist", "urgency", "lifestyle_advice", "diet_advice", "medicines_mentioned", "follow_up_tests", "confidence_score", "disclaimer")
+            if any(key not in data or data[key] is None for key in required):
+                raise ValueError("AI report analysis is missing required fields")
+            raw_params = data["parameters"]
+            if not isinstance(raw_params, list):
+                raise ValueError("AI report analysis contains invalid parameter data")
             param_cards = []
             for p in raw_params:
+                if any(key not in p for key in ("name", "value", "status", "meaning", "recommendation")):
+                    raise ValueError("AI report analysis contains an incomplete parameter")
                 param_cards.append(
                     ParameterCard(
-                        name=p.get("name", "Lab Parameter"),
-                        value=str(p.get("value", "")),
-                        unit=p.get("unit", ""),
-                        reference_range=p.get("reference_range", ""),
-                        status=p.get("status", "NORMAL").upper(),
-                        meaning=p.get("meaning", "Within physiological range."),
-                        recommendation=p.get("recommendation", "Maintain balanced diet and hydration."),
-                        category=p.get("category", "General"),
+                        name=p["name"], value=str(p["value"]), unit=p.get("unit"),
+                        reference_range=p.get("reference_range"), status=p["status"].upper(),
+                        meaning=p["meaning"], recommendation=p["recommendation"], category=p.get("category"),
                     )
                 )
 
             return MedicalReportExplainResponse(
                 report_title=data.get("report_title", f"AI Clinical Analysis — {document_type}"),
                 test_type=document_type,
-                test_purpose=data.get("test_purpose", "Comprehensive diagnostic evaluation."),
-                overall_status=data.get("overall_status", "MILD_CONCERN"),
-                status_badge=data.get("status_badge", "Mild Concern"),
-                summary_plain_english=data.get("summary_plain_english", "Report analyzed successfully."),
+                test_purpose=data["test_purpose"],
+                overall_status=data["overall_status"],
+                status_badge=data["status_badge"],
+                summary_plain_english=data["summary_plain_english"],
                 parameters=param_cards,
-                organ_system_status=data.get("organ_system_status", {"Kidney Function": "Normal", "Liver Function": "Normal", "Blood": "Normal"}),
-                possible_health_concerns=data.get("possible_health_concerns", ["Borderline biomarker values"]),
-                severity=data.get("severity", "Mild Concern"),
-                recommended_specialist=data.get("recommended_specialist", "General Physician"),
-                urgency=data.get("urgency", "Not urgent - Book General Physician within 7 days"),
-                lifestyle_advice=data.get("lifestyle_advice", ["Stay hydrated", "Daily 30-min walk", "Adequate rest"]),
-                diet_advice=data.get("diet_advice", ["Nutritious whole grains", "Fresh vegetables and fruit"]),
-                medicines_mentioned=data.get("medicines_mentioned", []),
-                follow_up_tests=data.get("follow_up_tests", ["Follow-up routine lab review in 3 months"]),
-                confidence_score=0.98,
+                organ_system_status=data["organ_system_status"],
+                possible_health_concerns=data["possible_health_concerns"],
+                severity=data["severity"],
+                recommended_specialist=data["recommended_specialist"],
+                urgency=data["urgency"],
+                lifestyle_advice=data["lifestyle_advice"],
+                diet_advice=data["diet_advice"],
+                medicines_mentioned=data["medicines_mentioned"],
+                follow_up_tests=data["follow_up_tests"],
+                confidence_score=float(data["confidence_score"]),
                 language=language,
-                saved_to_case_history=True,
+                saved_to_case_history=False,
             )
         except Exception as e:
-            logger.warning(f"[Medical Report Explainer Fallback] {e}")
-            return MedicalReportExplainResponse(
-                report_title="Comprehensive Diagnostic Lab Panel",
-                test_type=document_type,
-                test_purpose="Routine metabolic, hematological, and organ function assessment.",
-                overall_status="MILD_CONCERN",
-                status_badge="Mild Concern",
-                summary_plain_english="Your blood report indicates that your kidney, liver, and blood sugar levels are healthy. Hemoglobin is slightly below the reference threshold, indicating mild anemia. Incorporating iron-rich vegetables and legumes into your daily meals is recommended.",
-                parameters=[
-                    ParameterCard(
-                        name="Hemoglobin (Hb)",
-                        value="11.2",
-                        unit="g/dL",
-                        reference_range="12.0 - 15.5",
-                        status="BORDERLINE",
-                        meaning="Your blood carries slightly less oxygen than normal.",
-                        recommendation="Eat iron-rich foods such as spinach, beans, pomegranate, and lentils.",
-                        category="Blood Counts"
-                    ),
-                    ParameterCard(
-                        name="Serum Creatinine",
-                        value="0.9",
-                        unit="mg/dL",
-                        reference_range="0.7 - 1.3",
-                        status="NORMAL",
-                        meaning="Your kidney filtration is functioning normally.",
-                        recommendation="Drink 2 to 3 liters of water daily to maintain kidney hydration.",
-                        category="Kidney Function"
-                    ),
-                    ParameterCard(
-                        name="Fasting Blood Glucose",
-                        value="98",
-                        unit="mg/dL",
-                        reference_range="70 - 100",
-                        status="NORMAL",
-                        meaning="Your blood sugar is in the healthy normal range.",
-                        recommendation="Maintain balanced meal timings and light exercise.",
-                        category="Metabolic Health"
-                    )
-                ],
-                organ_system_status={"Kidney Function": "Normal", "Liver Function": "Normal", "Heart Markers": "Normal", "Blood Counts": "Mild Concern"},
-                possible_health_concerns=["Mild Iron Deficiency / Borderline Anemia"],
-                severity="Mild Concern",
-                recommended_specialist="General Physician",
-                urgency="Not urgent - Book General Physician within 7 days",
-                lifestyle_advice=["Drink 2-3 liters of water daily", "30 minutes of brisk walking", "Adequate sleep"],
-                diet_advice=["Dark green leafy vegetables", "Citrus fruits with meals", "Whole lentils and grains"],
-                medicines_mentioned=["Telmisartan 40mg"],
-                follow_up_tests=["Repeat Complete Blood Count in 3 months"],
-                confidence_score=0.96,
-                language=language,
-                saved_to_case_history=True,
-            )
+            logger.warning(f"[Medical Report Explainer] {e}")
+            raise RuntimeError("AI medical report analysis is temporarily unavailable.") from e
