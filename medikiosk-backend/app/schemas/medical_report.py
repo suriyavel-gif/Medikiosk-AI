@@ -8,7 +8,7 @@ class MedicalReportResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    visit_id: str
+    visit_id: Optional[str] = None
     patient_id: str
     report_type: ReportTypeEnum
     title: str

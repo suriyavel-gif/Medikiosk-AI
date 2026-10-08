@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { AppLayout } from "@/components/AppLayout";
 import { useAuth } from "@/lib/auth-context";
 import { useHospital } from "@/lib/hospital-context";
+import { api } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Search,
@@ -78,16 +79,7 @@ export default function DoctorSearchPatientPage() {
     },
   ];
 
-  const filteredSuggestions = patientRegistry.filter((p) => {
-    if (!query.trim()) return true;
-    const q = query.toLowerCase();
-    return (
-      p.name.toLowerCase().includes(q) ||
-      p.mrn.toLowerCase().includes(q) ||
-      p.national_health_id.includes(q) ||
-      p.phone.includes(q)
-    );
-  });
+  const filteredSuggestions = patientRegistry;
 
   const handleSelectPatient = (patient: any) => {
     router.push(`/patient-history/${patient.id}`);

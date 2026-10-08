@@ -70,7 +70,7 @@ export default function PatientHistoryComprehensivePage() {
   // Periodic Real-Time Consent Polling
   const checkConsentStatus = async () => {
     try {
-      const res = await api.consent.checkAccess(patientId, "DOC-CARD-001");
+      const res = await api.consent.checkAccess(patientId);
       if (res.success) {
         setHasConsentAccess(res.has_access);
         setConsentStatus(res.status);
@@ -92,7 +92,7 @@ export default function PatientHistoryComprehensivePage() {
     try {
       await api.consent.requestAccess({
         patient_id: patientId,
-        patient_name: aiSummary.patient_name || "Vikram Malhotra",
+        patient_name: aiSummary?.patient_name || "Vikram Malhotra",
         doctor_name: "Dr. Rajesh Sharma, MD",
         hospital_name: "Apollo Hospitals Chennai",
         department: "Cardiology Consultation OPD",
@@ -115,42 +115,48 @@ export default function PatientHistoryComprehensivePage() {
   };
 
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
-  const [aiSummary, setAiSummary] = useState<any>({
-    patient_name: "Vikram Malhotra",
-    age: 38,
-    gender: "Male",
-    blood_group: "O+",
-    mrn: "MRN-2026-10001",
-    national_health_id: "91-4920-8831-0941",
-    major_diseases: ["Essential Hypertension (ICD-10 I10)", "Type 2 Diabetes Mellitus (ICD-10 E11)"],
-    current_complaint: "Acute viral URI with low-grade fever, sore throat, and body ache",
-    vitals_summary: { heart_rate: "76 bpm", blood_pressure: "120/80 mmHg", spo2: "98%", temperature: "98.4 F" },
-    current_medicines: ["Telmisartan 40mg OD (Morning)", "Metformin 500mg SR BD (With meals)"],
-    allergies: ["Penicillin Anaphylaxis (CRITICAL RED FLAG)", "Sulfa Drugs (Mild rash)"],
-    recent_lab_findings: ["12-Lead ECG: Normal Sinus Rhythm", "HbA1c: 6.4% (Controlled)", "Serum Creatinine: 0.9 mg/dL"],
-    possible_diagnosis: "Acute Viral Upper Respiratory Infection with Controlled Baseline Hypertension",
-    recommended_tests: ["12-Lead ECG", "Complete Blood Count (CBC)", "Serum Electrolytes"],
-    risk_level: "MODERATE (ESI-3)",
-    clinical_notes: "Patient vitals stable. Strict Penicillin contraindication documented in CDSS ledger. Continue baseline Telmisartan and Metformin. Recommend Macrolide if secondary bacterial infection is suspected.",
-  });
+  const [aiSummary, setAiSummary] = useState<any>(null);
+  const [timelineEvents, setTimelineEvents] = useState<any[]>([]);
 
   // Fetch live Gemini AI summary on mount or language switch
   useEffect(() => {
     async function loadAiSummary() {
       setAiSummaryLoading(true);
       try {
-        const res = await api.ai.getCaseSummary({ patient_id: patientId, language });
-        if (res.success && res.data) {
-          setAiSummary(res.data);
+        const [aiRes, timelineRes] = await Promise.all([
+          api.ai.getCaseSummary({ patient_id: patientId, language }),
+          api.doctor.viewPatientTimeline(patientId).catch(() => null)
+        ]);
+        if (aiRes.success && aiRes.data) {
+          setAiSummary(aiRes.data);
+        } else {
+          setAiSummary(null);
+        }
+        if (timelineRes && timelineRes.success && timelineRes.data && timelineRes.data.timeline) {
+          setTimelineEvents(timelineRes.data.timeline.map((t: any) => ({
+            type: t.event_type,
+            title: t.title,
+            date: new Date(t.timestamp).toLocaleDateString(),
+            time: new Date(t.timestamp).toLocaleTimeString(),
+            facility: t.hospital_name || "Unknown",
+            department: "Department",
+            clinician: t.doctor_name || "Unknown",
+            details: t.description,
+            badge: t.event_type,
+            badgeColor: "bg-blue-100 text-[#2563EB]",
+            icon: History
+          })));
         }
       } catch {
-        // Retain verified fallback data
+        // ignore
       } finally {
         setAiSummaryLoading(false);
       }
     }
-    loadAiSummary();
-  }, [patientId, language]);
+    if (hasConsentAccess) {
+      loadAiSummary();
+    }
+  }, [patientId, language, hasConsentAccess]);
 
   const handleRefreshSummary = async () => {
     setAiSummaryLoading(true);
@@ -167,100 +173,7 @@ export default function PatientHistoryComprehensivePage() {
     }
   };
 
-  // Chronological Longitudinal Medical Timeline Data (AI Intake, Visits, Prescriptions, Labs, Admissions, Vaccines, Emergency)
-  const timelineEvents = [
-    {
-      type: "AI_INTAKE",
-      title: "AI Clinical Intake & Triage Assessment Report",
-      date: "September 02, 2026",
-      time: "10:30 AM",
-      facility: "Apollo Hospitals Chennai",
-      department: "AI Clinical Triage Station",
-      clinician: "MediKiosk AI (Triage Engine 2.5)",
-      details: "Chief Complaint: Acute viral URI with fever and sore throat. Triage Risk: MEDIUM. Preliminary Assessment: Mild acute viral presentation without hemodynamic compromise. Suggested OTC: Paracetamol 650mg, Saline nasal spray, ORS. Recommended OP Consultation within 24-48 hours.",
-      badge: "AI Triage: MEDIUM",
-      badgeColor: "bg-yellow-100 text-yellow-900 border border-yellow-300",
-      icon: Sparkles,
-    },
-    {
-      type: "VISIT",
-      title: "Hospital OPD Encounter — Acute Viral URI",
-      date: "August 28, 2026",
-      time: "10:30 AM",
-      facility: "Apollo Hospitals Chennai",
-      department: "Cardiology OPD (Room 304)",
-      clinician: "Dr. Rajesh Sharma, MD (DM Cardiology)",
-      details: "Patient presented with 3-day history of low-grade fever and throat irritation. Vitals: BP 124/82, HR 78 bpm, SpO2 98%.",
-      badge: "Completed OPD",
-      badgeColor: "bg-blue-100 text-[#2563EB]",
-      icon: Stethoscope,
-    },
-    {
-      type: "PRESCRIPTION",
-      title: "E-Prescription Dispatched & Digitally Signed",
-      date: "August 28, 2026",
-      time: "10:45 AM",
-      facility: "Apollo Hospitals Chennai",
-      department: "Pharmacy & E-Prescribing Gateway",
-      clinician: "Dr. Rajesh Sharma, MD",
-      details: "Formulations: Paracetamol 650mg SOS, Levocetirizine 5mg (Night), Telmisartan 40mg (Continue OD). CDSS checked: 0 allergy contraindications.",
-      badge: "Active Rx",
-      badgeColor: "bg-purple-100 text-purple-700",
-      icon: Pill,
-    },
-    {
-      type: "LAB",
-      title: "Diagnostic Lab Workup & 12-Lead ECG",
-      date: "August 28, 2026",
-      time: "11:15 AM",
-      facility: "Apollo Diagnostics Central Lab",
-      department: "Clinical Pathology & Cardiology Diagnostics",
-      clinician: "Dr. Sandeep Nair, MS",
-      details: "12-Lead Resting ECG: Normal Sinus Rhythm (HR 76). CBC: WBC 7,400/mcL (Normal). HbA1c: 6.4% (Good Glycemic Control).",
-      badge: "Normal Labs",
-      badgeColor: "bg-emerald-100 text-emerald-800",
-      icon: Microscope,
-    },
-    {
-      type: "EMERGENCY",
-      title: "🚨 Emergency SOS Telemetry Triggered & Resolved",
-      date: "August 15, 2026",
-      time: "02:14 PM",
-      facility: "Apollo Hospitals Chennai",
-      department: "Emergency Trauma & Kiosk Station 1",
-      clinician: "Emergency Crash Team (Dr. Priya Raman)",
-      details: "Patient triggered rapid assistance. SMS sent to caregiver (+918248381919), automated voice call dispatched, vital signs stabilized (HR 105 -> 78 bpm).",
-      badge: "Resolved ESI-1",
-      badgeColor: "bg-rose-100 text-rose-800",
-      icon: ShieldAlert,
-    },
-    {
-      type: "VACCINE",
-      title: "Immunization Encounter — Influenza Quadrivalent",
-      date: "May 10, 2026",
-      time: "11:00 AM",
-      facility: "Government General Hospital Chennai",
-      department: "Preventive Health & Immunization",
-      clinician: "Dr. Arun Kumar, MS",
-      details: "Administered Annual Flu Vaccine (0.5mL IM Right Deltoid). Batch #FLU-2026-881. No adverse reaction observed.",
-      badge: "Immunized",
-      badgeColor: "bg-teal-100 text-teal-800",
-      icon: Syringe,
-    },
-    {
-      type: "ADMISSION",
-      title: "Hospital Inpatient Admission & Discharge Audit",
-      date: "January 22, 2026",
-      time: "09:00 AM",
-      facility: "AIIMS New Delhi",
-      department: "Internal Medicine Inpatient Ward 4B",
-      clinician: "Dr. Sanjay Gupta, MD",
-      details: "Elective 24-hr observation for glycemic optimization and cardiac stress test. Discharge summary: Normal myocardial perfusion, discharged in stable condition.",
-      badge: "Discharged",
-      badgeColor: "bg-amber-100 text-amber-800",
-      icon: Bed,
-    },
-  ];
+  
 
   return (
     <AppLayout>
@@ -434,18 +347,18 @@ export default function PatientHistoryComprehensivePage() {
               </div>
 
               <h1 className="text-3xl font-bold text-slate-900 tracking-tight flex items-center gap-3">
-                <span>{aiSummary.patient_name}</span>
+                <span>{aiSummary?.patient_name || "Loading..."}</span>
                 <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-50 text-[#2563EB] border border-blue-200">
-                  {aiSummary.mrn}
+                  {aiSummary?.mrn}
                 </span>
               </h1>
 
               <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
-                <span>{aiSummary.age} Yrs • {aiSummary.gender}</span>
+                <span>{aiSummary?.age || 0} Yrs • {aiSummary?.gender || "Unknown"}</span>
                 <span>•</span>
-                <span>Blood Group: <strong className="text-slate-900 font-bold">{aiSummary.blood_group}</strong></span>
+                <span>Blood Group: <strong className="text-slate-900 font-bold">{aiSummary?.blood_group}</strong></span>
                 <span>•</span>
-                <span>ABHA: <span className="font-mono font-bold text-slate-800">{aiSummary.national_health_id}</span></span>
+                <span>ABHA: <span className="font-mono font-bold text-slate-800">{aiSummary?.national_health_id}</span></span>
                 <span>•</span>
                 <span>Facility: <strong>Apollo Hospitals Chennai</strong></span>
               </div>
@@ -497,7 +410,7 @@ export default function PatientHistoryComprehensivePage() {
                 <Sparkles className="w-5 h-5 text-[#2563EB]" />
                 <h2 className="text-[22px] font-semibold text-slate-900">{t("ai_clinical_summary")}</h2>
                 <span className="px-2.5 py-0.5 rounded-full bg-blue-100 text-[#2563EB] text-[11px] font-bold">
-                  {aiSummary.risk_level}
+                  {aiSummary?.risk_level}
                 </span>
               </div>
               <p className="text-xs text-slate-500">
@@ -521,13 +434,13 @@ export default function PatientHistoryComprehensivePage() {
             <div className="p-4 rounded-xl bg-[#F8FAFC] border border-slate-200/80 space-y-3">
               <div>
                 <span className="text-[10px] font-bold uppercase text-slate-500 block mb-1">{t("chief_complaint")}</span>
-                <p className="font-semibold text-slate-900 text-xs leading-snug">{aiSummary.current_complaint}</p>
+                <p className="font-semibold text-slate-900 text-xs leading-snug">{aiSummary?.current_complaint}</p>
               </div>
 
               <div className="pt-2 border-t border-slate-200/60">
                 <span className="text-[10px] font-bold uppercase text-slate-500 block mb-1">{t("major_conditions")}</span>
                 <ul className="space-y-1 text-slate-800">
-                  {aiSummary.major_diseases?.map((d: string, i: number) => (
+                  {aiSummary?.major_diseases?.map((d: string, i: number) => (
                     <li key={i} className="flex items-center gap-1.5">
                       <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB]"></span>
                       <span>{d}</span>
@@ -542,7 +455,7 @@ export default function PatientHistoryComprehensivePage() {
               <div>
                 <span className="text-[10px] font-bold uppercase text-slate-500 block mb-1">{t("active_medications")}</span>
                 <ul className="space-y-1 text-slate-800">
-                  {aiSummary.current_medicines?.map((m: string, i: number) => (
+                  {aiSummary?.current_medicines?.map((m: string, i: number) => (
                     <li key={i} className="flex items-center gap-1.5">
                       <Pill className="w-3 h-3 text-purple-600" />
                       <span>{m}</span>
@@ -554,7 +467,7 @@ export default function PatientHistoryComprehensivePage() {
               <div className="pt-2 border-t border-slate-200/60">
                 <span className="text-[10px] font-bold uppercase text-slate-500 block mb-1">{t("recent_labs")}</span>
                 <ul className="space-y-1 text-slate-800">
-                  {aiSummary.recent_lab_findings?.map((l: string, i: number) => (
+                  {aiSummary?.recent_lab_findings?.map((l: string, i: number) => (
                     <li key={i} className="flex items-center gap-1.5">
                       <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                       <span>{l}</span>
@@ -568,13 +481,13 @@ export default function PatientHistoryComprehensivePage() {
             <div className="p-4 rounded-xl bg-blue-50/50 border border-blue-200 space-y-3">
               <div>
                 <span className="text-[10px] font-bold uppercase text-[#2563EB] block mb-1">{t("possible_diagnosis")}</span>
-                <p className="font-bold text-slate-900 text-xs leading-snug">{aiSummary.possible_diagnosis}</p>
+                <p className="font-bold text-slate-900 text-xs leading-snug">{aiSummary?.possible_diagnosis}</p>
               </div>
 
               <div className="pt-2 border-t border-blue-200/60">
                 <span className="text-[10px] font-bold uppercase text-slate-600 block mb-1">{t("recommended_tests")}</span>
                 <ul className="space-y-1 text-slate-800">
-                  {aiSummary.recommended_tests?.map((tItem: string, i: number) => (
+                  {aiSummary?.recommended_tests?.map((tItem: string, i: number) => (
                     <li key={i} className="flex items-center gap-1.5 font-medium">
                       <Microscope className="w-3 h-3 text-[#2563EB]" />
                       <span>{tItem}</span>
@@ -588,7 +501,7 @@ export default function PatientHistoryComprehensivePage() {
           {/* Clinical Rational Summary */}
           <div className="p-4 rounded-xl bg-white border border-blue-200/80 space-y-1 text-xs text-slate-800">
             <span className="text-[10px] font-bold text-slate-500 uppercase">CDSS Clinical Copilot Guidance</span>
-            <p className="leading-relaxed">{aiSummary.clinical_notes}</p>
+            <p className="leading-relaxed">{aiSummary?.clinical_notes}</p>
           </div>
         </div>
 
@@ -601,46 +514,7 @@ export default function PatientHistoryComprehensivePage() {
               <Pill className="w-5 h-5 text-[#2563EB]" />
               <h2 className="text-[20px] font-semibold text-slate-900">Medication Compliance & Adherence Record</h2>
               <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 font-bold text-xs border border-emerald-200">
-                95% Adherence
-              </span>
-            </div>
-            <span className="text-xs text-slate-500">
-              Live automated telemetry from Patient Reminder Hub
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-xs">
-            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
-              <span className="text-slate-500 font-semibold block">Adherence Rate</span>
-              <strong className="text-xl font-bold text-emerald-700 font-mono">95%</strong>
-              <span className="text-[10px] text-slate-500">Patient Trend: Excellent</span>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
-              <span className="text-slate-500 font-semibold block">Missed Doses</span>
-              <strong className="text-xl font-bold text-slate-900 font-mono">2 doses</strong>
-              <span className="text-[10px] text-slate-500">Past 30 Days</span>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
-              <span className="text-slate-500 font-semibold block">Last Dose Recorded</span>
-              <strong className="text-xl font-bold text-[#2563EB]">Today 08:04 AM</strong>
-              <span className="text-[10px] text-slate-500">Telmisartan 40mg</span>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
-              <span className="text-slate-500 font-semibold block">Active Regimen</span>
-              <strong className="text-xl font-bold text-slate-900">3 Prescriptions</strong>
-              <span className="text-[10px] text-emerald-700">0 Contraindications</span>
-            </div>
-          </div>
-
-          <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 text-[11px] text-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <strong>Compliance Audit Note: </strong>
-              <span>Patient demonstrates high adherence to morning Telmisartan and Metformin. One missed dose of Amoxicillin logged on Aug 30 due to mild gastrointestinal discomfort.</span>
-            </div>
-            <span className="text-emerald-700 font-bold shrink-0">Blood Pressure Controlled (120/80 mmHg)</span>
+                N/A</span></div></div><div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-xs"><div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1"><span className="text-slate-500 font-semibold block">Adherence Rate</span><strong className="text-xl font-bold text-emerald-700 font-mono">N/A</strong></div><div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1"><span className="text-slate-500 font-semibold block">Missed Doses</span><strong className="text-xl font-bold text-slate-900 font-mono">N/A</strong></div><div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1"><span className="text-slate-500 font-semibold block">Last Dose Recorded</span><strong className="text-xl font-bold text-[#2563EB]">N/A</strong></div><div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1"><span className="text-slate-500 font-semibold block">Active Regimen</span><strong className="text-xl font-bold text-slate-900">N/A</strong></div></div><div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 text-[11px] text-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><strong>Compliance Audit Note: </strong><span>Insufficient real-time telemetry data.</span></div><span className="text-emerald-700 font-bold shrink-0">N/A</span>
           </div>
         </div>
 

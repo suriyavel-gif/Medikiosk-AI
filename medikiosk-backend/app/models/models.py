@@ -516,7 +516,7 @@ class VitalsRecord(Base):
     __tablename__ = "vitals_records"
 
     id = Column(String(36), primary_key=True, default=generate_uuid_str)
-    visit_id = Column(String(36), ForeignKey("visits.id", ondelete="CASCADE"), nullable=False, index=True)
+    visit_id = Column(String(36), ForeignKey("visits.id", ondelete="CASCADE"), nullable=True, index=True)
     patient_id = Column(String(36), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False, index=True)
     kiosk_id = Column(String(36), ForeignKey("kiosk_devices.id", ondelete="SET NULL"), nullable=True)
     systolic_bp = Column(Numeric(5, 2), nullable=True)
@@ -585,7 +585,7 @@ class Diagnosis(Base):
     __tablename__ = "diagnoses"
 
     id = Column(String(36), primary_key=True, default=generate_uuid_str)
-    visit_id = Column(String(36), ForeignKey("visits.id", ondelete="CASCADE"), nullable=False, index=True)
+    visit_id = Column(String(36), ForeignKey("visits.id", ondelete="CASCADE"), nullable=True, index=True)
     patient_id = Column(String(36), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False, index=True)
     doctor_id = Column(String(36), ForeignKey("doctors.id", ondelete="RESTRICT"), nullable=False, index=True)
     diagnosis_type = Column(String(50), nullable=False, default="PROVISIONAL")  # PROVISIONAL, FINAL, DIFFERENTIAL
@@ -607,7 +607,7 @@ class MedicalReport(Base):
     __tablename__ = "medical_reports"
 
     id = Column(String(36), primary_key=True, default=generate_uuid_str)
-    visit_id = Column(String(36), ForeignKey("visits.id", ondelete="CASCADE"), nullable=False, index=True)
+    visit_id = Column(String(36), ForeignKey("visits.id", ondelete="CASCADE"), nullable=True, index=True)
     patient_id = Column(String(36), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False, index=True)
     uploaded_by_user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     report_type = Column(SAEnum(ReportTypeEnum), nullable=False, default=ReportTypeEnum.LAB_BIOCHEMISTRY)
@@ -677,7 +677,7 @@ class Prescription(Base):
 
     id = Column(String(36), primary_key=True, default=generate_uuid_str)
     prescription_number = Column(String(50), nullable=False, unique=True, index=True)
-    visit_id = Column(String(36), ForeignKey("visits.id", ondelete="CASCADE"), nullable=False, index=True)
+    visit_id = Column(String(36), ForeignKey("visits.id", ondelete="CASCADE"), nullable=True, index=True)
     patient_id = Column(String(36), ForeignKey("patients.id", ondelete="RESTRICT"), nullable=False, index=True)
     doctor_id = Column(String(36), ForeignKey("doctors.id", ondelete="RESTRICT"), nullable=False, index=True)
     digital_signature_hash = Column(Text, nullable=False)

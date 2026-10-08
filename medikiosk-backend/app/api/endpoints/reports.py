@@ -46,7 +46,7 @@ def _require_report_access(report: MedicalReport, current_user: CurrentUser, db:
 async def upload_report(
     request: Request,
     file: UploadFile = File(...),
-    visit_id: str = Form(...),
+    visit_id: Optional[str] = Form(None),
     patient_id: str = Form(...),
     title: str = Form(...),
     report_type: ReportTypeEnum = Form(ReportTypeEnum.LAB_BIOCHEMISTRY),
@@ -60,11 +60,12 @@ async def upload_report(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot upload a report for another patient")
     elif current_user.role not in (UserRoleEnum.DOCTOR.value, UserRoleEnum.RECEPTIONIST.value, UserRoleEnum.HOSPITAL_ADMIN.value):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Role cannot upload patient reports")
-    visit = db.query(Visit).filter(Visit.id == visit_id, Visit.patient_id == patient_id).first()
-    if not visit:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient visit not found")
-    if current_user.role != UserRoleEnum.PATIENT.value and current_user.hospital_id != visit.hospital_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Visit is outside your hospital")
+    if visit_id:
+        visit = db.query(Visit).filter(Visit.id == visit_id, Visit.patient_id == patient_id).first()
+        if not visit:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient visit not found")
+        if current_user.role != UserRoleEnum.PATIENT.value and current_user.hospital_id != visit.hospital_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Visit is outside your hospital")
     client_ip = get_client_ip(request)
     report = await ReportService.upload_medical_report(
         db=db,

@@ -43,6 +43,24 @@ export default function DoctorDashboardPage() {
   // Real-Time Intelligent Emergency Response Alert State
   const [emergencyAlert, setEmergencyAlert] = useState<any | null>(null);
 
+  useEffect(() => {
+    let active = true;
+    const fetchAlerts = async () => {
+      try {
+        const res = await api.emergency.getActiveAlerts();
+        if (active && res.success && res.alerts && res.alerts.length > 0) {
+          setEmergencyAlert(res.alerts[0]);
+        } else if (active) {
+          setEmergencyAlert(null);
+        }
+      } catch (e) {}
+    };
+    fetchAlerts();
+    const interval = setInterval(fetchAlerts, 5000);
+    return () => { active = false; clearInterval(interval); };
+  }, []);
+
+
   const handleAcceptEmergencyCase = async () => {
     if (!emergencyAlert) return;
     try {

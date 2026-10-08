@@ -183,12 +183,27 @@ export const api = {
   consent: {
     getRequests: (params?: { patient_id?: string; doctor_id?: string; status_filter?: string }) =>
       apiClient.get<{ success: boolean; count: number; requests: any[] }>("/consent/requests", { params }).then((r) => r.data),
-    checkAccess: (patientId: string, doctorId?: string) =>
-      apiClient.get<{ success: boolean; has_access: boolean; status: string; consent: any; message: string }>("/consent/check-access", { params: { patient_id: patientId, doctor_id: doctorId || "DOC-CARD-001" } }).then((r) => r.data),
+    checkAccess: (patientId: string, doctorId?: string) => {
+      const params: any = { patient_id: patientId };
+      if (doctorId) params.doctor_id = doctorId;
+      return apiClient.get<{ success: boolean; has_access: boolean; status: string; consent: any; message: string }>("/consent/check-access", { params }).then((r) => r.data);
+    },
     requestAccess: (data: { patient_id: string; patient_name?: string; reason: string; duration_text?: string; duration_minutes?: number; doctor_notes?: string; hospital_name?: string; department?: string; doctor_name?: string; doctor_id?: string }) =>
       apiClient.post<{ success: boolean; message: string; request: any }>("/consent/request", data).then((r) => r.data),
-    takeAction: (requestId: string, action: "APPROVE" | "REJECT" | "REVOKE", duration_text?: string, duration_minutes?: number) =>
-      apiClient.post<{ success: boolean; message: string; request: any }>("/consent/action", { request_id: requestId, action, duration_text, duration_minutes: duration_minutes ?? (duration_text ? parseInt(duration_text, 10) * (duration_text.toLowerCase().includes("hour") ? 60 : 1) : undefined) }).then((r) => r.data),
+    takeAction: (requestId: string, action: "APPROVE" | "REJECT" | "REVOKE", duration_text?: string, duration_minutes?: number) => {
+      let mins = duration_minutes;
+      if (mins === undefined && duration_text) {
+        if (duration_text.toLowerCase().includes("until")) {
+          mins = 4320; // Max allowed
+        } else {
+          const num = parseInt(duration_text, 10);
+          if (!isNaN(num)) {
+            mins = num * (duration_text.toLowerCase().includes("hour") ? 60 : 1);
+          }
+        }
+      }
+      return apiClient.post<{ success: boolean; message: string; request: any }>("/consent/action", { request_id: requestId, action, duration_text, duration_minutes: mins }).then((r) => r.data);
+    },
     getLedger: (patientId: string) =>
       apiClient.get<{ success: boolean; count: number; ledger: any[] }>(`/consent/ledger/${patientId}`).then((r) => r.data),
     getActivityLogs: (patientId: string) =>

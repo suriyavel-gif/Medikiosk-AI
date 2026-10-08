@@ -113,14 +113,9 @@ export default function MedicalReportIntelligencePage() {
     setImageQualityError(null);
     setProcessingStep(1);
     try {
-      const timeline = await api.patient.getTimeline();
-      if (!timeline.success || !timeline.data) throw new Error(timeline.message || "Unable to load your visits");
-      const visitEvent = timeline.data.timeline?.find((event: any) => event.event_type === "VISIT");
-      if (!visitEvent?.event_id) throw new Error("A registered visit is required before uploading a report.");
       setProcessingStep(2);
-      const formData = new FormData();
-      formData.append("file", uploadedFile);
-      formData.append("visit_id", visitEvent.event_id);
+        const formData = new FormData();
+        formData.append("file", uploadedFile);
       formData.append("patient_id", user.id);
       formData.append("title", uploadedFile.name);
       formData.append("report_type", docType);

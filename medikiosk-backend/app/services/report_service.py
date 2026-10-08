@@ -28,23 +28,23 @@ class ReportService:
     async def upload_medical_report(
         db: Session,
         file: UploadFile,
-        visit_id: str,
         patient_id: str,
         title: str,
+        visit_id: Optional[str] = None,
         report_type: ReportTypeEnum = ReportTypeEnum.LAB_BIOCHEMISTRY,
         uploaded_by_user_id: Optional[str] = None,
         is_confidential: bool = False,
         client_ip: str = "127.0.0.1",
     ) -> MedicalReportResponse:
         """Store uploaded medical diagnostic document, compute SHA256, and initialize OCR record."""
-        visit = db.query(Visit).filter(Visit.id == visit_id).first()
-        if not visit:
+        visit = db.query(Visit).filter(Visit.id == visit_id).first() if visit_id else None
+        if visit_id and not visit:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Visit not found")
 
         patient = db.query(Patient).filter(Patient.id == patient_id).first()
         if not patient:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found")
-        if visit.patient_id != patient.id:
+        if visit and visit.patient_id != patient.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Visit does not belong to the selected patient")
 
         content = await file.read()
@@ -93,7 +93,7 @@ class ReportService:
             target_table="medical_reports",
             target_record_id=report.id,
             actor_user_id=uploaded_by_user_id,
-            hospital_id=visit.hospital_id,
+            hospital_id=visit.hospital_id if visit else None,
             client_ip=client_ip,
             description=f"Medical report uploaded: {report.title} (Checksum: {sha256_hash[:8]})",
         )

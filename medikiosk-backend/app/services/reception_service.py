@@ -125,6 +125,7 @@ class ReceptionService:
             admitted_at=datetime.now(timezone.utc),
         )
         db.add(visit)
+        db.flush()
 
         # Generate Queue Token
         token_prefix = dept.code[:2].upper() if dept.code else "OP"
